@@ -6,7 +6,7 @@ import { figureSvg } from './figure.js';
 import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
 import { parseAsk, windowFor } from './ask.js';
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -126,12 +126,37 @@ async function answer(text, over = {}) {
   }
   p.also = (p.also || []).filter((k) => k !== p.occ);
   if (over.label) p.label = over.label;
+  if (over.avoid && over.avoid.length) {                          // "change it": what was on screen stays out of the next fit
+    p.avoid = [...new Set(over.avoid)];
+    p.exclude = [...new Set(p.exclude.concat(p.avoid))];
+    for (const [k, id] of Object.entries(p.locks)) if (p.avoid.includes(id)) delete p.locks[k];
+    for (const k of Object.keys(p.allow)) { p.allow[k] = p.allow[k].filter((id) => !p.avoid.includes(id)); if (!p.allow[k].length) delete p.allow[k]; }
+    const names = p.avoid.map((id) => { const it = item(id); return it ? (it.short || it.name) : null; }).filter(Boolean);
+    if (names.length) p.notes.push({ k: 'avoid', t: `Left out because you asked for a change: ${E.listAnd(names)}.` });
+  }
   ui.ask = p; ui.date = p.date; ui.occ = p.occ; ui.locks = {}; ui.idx = 0; ui.askDay = today();
   const e = entryFor(ui.date, ui.occ);
   ui.editing = !!e && (!!over.editing || !fitsAsk(outfitFromEntry(e), p));
   ui.mode = 'fit'; ui.tab = 'fit'; closeSheet();
-  await present();
+  await present(over.prefer || null);
   window.scrollTo(0, 0);
+}
+// Words in the Change box that mean "not what is on screen": the whole fit, or one named piece of it.
+const CHANGE_ALL = /\b(change it|change this|change (?:the |this |my )?(?:fit|look|outfit)|something else|something different|(?:a )?different (?:fit|look|outfit|one)|another (?:one|fit|look|outfit)|not this|(?:a )?new (?:one|fit|look|outfit)|switch it up|start over|i (?:already )?wore (?:this|that|it)|wore (?:this|that|it)|worn (?:this|that|it))\b/;
+const CHANGE_ONE = /\b(?:change|different|another|other|swap|switch|new|replace|lose|drop)(?: out)?(?: the| my| that| those| these| a| an)? (jackets?|blazers?|suits?|coats?|shirts?|tops?|polos?|sweaters?|tees?|pants|trousers|jeans|slacks|chinos|shoes|loafers|sneakers|belts?|watch(?:es)?|hats?|socks|glasses)\b/g;
+const slotOfWord = (w) => (/^(jacket|blazer|suit)/.test(w) ? 'jacket' : /^coat/.test(w) ? 'coat' : /^(shirt|top|polo|sweater|tee)/.test(w) ? 'top' : /^(pants|trousers|jeans|slacks|chinos)/.test(w) ? 'bottom' : /^(shoes|loafers|sneakers)/.test(w) ? 'shoes' : /^belt/.test(w) ? 'belt' : /^watch/.test(w) ? 'watch' : /^hat/.test(w) ? 'hat' : /^glasses/.test(w) ? 'glasses' : 'socks');
+function avoidFrom(text, o, prior) {
+  const out = new Set(prior || []);
+  if (!o) return { ids: [...out], one: false };
+  const t = String(text).toLowerCase().replace(/[\u2018\u2019']/g, '');
+  const have = { jacket: o.suit || (o.jacket !== 'none' ? o.jacket : null), top: o.top, bottom: o.suit ? null : o.bottom, shoes: o.shoes, belt: o.belt !== 'none' ? o.belt : null, watch: o.watch, hat: o.hat, coat: o.coat, socks: o.socks, glasses: o.glasses };
+  const slots = new Set();
+  let m; CHANGE_ONE.lastIndex = 0;
+  while ((m = CHANGE_ONE.exec(t))) slots.add(slotOfWord(m[1]));
+  if (!slots.size && CHANGE_ALL.test(t)) ['jacket', 'top', 'bottom', 'shoes'].forEach((k) => slots.add(k));
+  const one = slots.size > 0 && !(slots.size === 4 && CHANGE_ALL.test(t));
+  for (const k of slots) if (have[k]) out.add(have[k]);
+  return { ids: [...out], one };                                 // one: a single piece was named, so the rest of the look should hold
 }
 function openDay(date, occ, extra) {
   ui.ask = blankAsk(date, occ, extra); ui.date = date; ui.occ = occ; ui.locks = {}; ui.idx = 0; ui.editing = !!(extra && extra.editing); ui.askDay = today();
@@ -619,14 +644,20 @@ const A = {
     if (!v || !ui.ask) return null;
     const a = ui.ask;
     const probe = parseAsk(v, { today: today(), date: ui.date, items: st().items, profile: st().profile });
-    if (probe.occSaid) return answer(v, { date: ui.date, editing: true });           // a new occasion is a new question, same day unless a day is named
-    return answer(a.text ? a.text + '. ' + v : v, { date: probe.dateSaid ? probe.date : ui.date, fixDate: true, occ: ui.occ, forceOcc: true, also: a.also, editing: true, label: a.label });
+    // "change it" or "different shoes" keeps what is on screen out of the next fit, unless this very message asks for that piece by name
+    const named = new Set(Object.values(probe.locks).concat(...Object.values(probe.allow).filter((ids) => ids.length <= 2)));
+    const now = current().o;
+    const av = avoidFrom(v, now, a.avoid);
+    const avoid = av.ids.filter((id) => !named.has(id));
+    const prefer = av.one && now ? now : null;
+    if (probe.occSaid) return answer(v, { date: ui.date, editing: true, avoid, prefer });    // a new occasion is a new question, same day unless a day is named
+    return answer(a.text ? a.text + '. ' + v : v, { date: probe.dateSaid ? probe.date : ui.date, fixDate: true, occ: ui.occ, forceOcc: true, also: a.also, editing: true, label: a.label, avoid, prefer });
   },
   pickOcc: () => openSheet({ type: 'occ' }),
   toChecks: () => { const el = $('.checks'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
   setOcc: (d) => {
     const a = ui.ask; if (!a || !E.OCCASIONS[d.occ]) return null;
-    a.occ = d.occ; a.occSaid = true; a.pinned = true; a.also = (a.also || []).filter((k) => k !== d.occ); a.notes = (a.notes || []).filter((n) => n.k === 'missing');
+    a.occ = d.occ; a.occSaid = true; a.pinned = true; a.also = (a.also || []).filter((k) => k !== d.occ); a.notes = (a.notes || []).filter((n) => n.k === 'missing' || n.k === 'avoid');
     ui.occ = d.occ; ui.locks = {}; ui.editing = false; closeSheet();
     return present();
   },
@@ -821,7 +852,7 @@ const IN = {
   askDate: (el) => { if (el.value) { ui.when = el.value; ui.date = el.value; render(); } },
   pillDate: (el) => {
     const a = ui.ask; if (!el.value || !a) return null;
-    return answer(a.text, Object.assign({ date: el.value, fixDate: true, label: a.label }, a.pinned ? { occ: ui.occ, forceOcc: true, also: a.also } : {}));
+    return answer(a.text, Object.assign({ date: el.value, fixDate: true, label: a.label, avoid: a.avoid }, a.pinned ? { occ: ui.occ, forceOcc: true, also: a.also } : {}));
   },
   quality: (el) => { st().settings.quality = el.value; S.save(); },
   auto: (el) => { st().settings.auto = el.checked; S.save(); },
