@@ -67,6 +67,13 @@ main { flex: 1; display: flex; flex-direction: column; gap: 14px; outline: 0;
 .pill.plain { background: none; border-style: dashed; color: var(--mute); font-weight: 500; }
 .pill.plain::after { display: none; }
 .pills > .link { margin-left: auto; padding: 4px 0; white-space: nowrap; }
+.changes { display: flex; flex-direction: column; gap: 7px; }
+.changes h3 span { color: var(--accent); margin-left: 6px; }
+.chip.took { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 8px 6px 13px; font-size: .84rem; max-width: 100%; text-align: left; }
+.chip.took span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.took b { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%; background: var(--soft); color: var(--mute); font-size: 14px; line-height: 20px; text-align: center; font-weight: 600; }
+.asked > .actions .btn { flex: 1; }
+.photo.making.prev img { filter: blur(2px) saturate(.75) brightness(.5); transform: none; }
 .reply { margin: 0; padding: 10px 12px; border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0; background: color-mix(in srgb, var(--accent) 7%, var(--soft)); font-size: .9rem; line-height: 1.45; }
 .notes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: .84rem; color: var(--mute); }
 .refine { display: flex; gap: 8px; align-items: center; }

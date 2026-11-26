@@ -7,7 +7,7 @@ import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
 import { parseAsk, windowFor } from './ask.js';
 import * as L from './link.js';
 
-const VERSION = '1.4.1';
+const VERSION = '1.5.0';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -15,6 +15,7 @@ const ui = {
   tab: 'fit', mode: 'ask', ask: null, draft: '', when: null, askDay: today(), loading: '', relaxed: '',
   date: today(), occ: null, locks: {}, results: [], idx: 0, editing: false,
   forecast: null, q: '', logFilter: 'all', sheet: null, busy: null, hasKey: false, link: null,
+  refineDraft: '', prevMock: null,
 };
 const st = () => S.state;
 const item = (id) => st().items.find((i) => i.id === id);
@@ -170,8 +171,10 @@ function respond(before, latest) {
   }
   const out = [];
   if (latest) {                                                   // a follow up: answer the new message first, then say what still holds
+    const undone = !!p.undo;
+    if (p.undo) { out.push(`Took back \u201c${p.undo}\u201d.`); delete p.undo; }
     for (const n of latest.notes || []) if (n.k === 'missing') out.push(n.t);
-    if (diff) out.push(diff);
+    if (diff) out.push(undone && /^Nothing changed/.test(diff) ? 'The fit stays as it is.' : diff);
     out.push(...tell(latest, fresh));
     if (latest.wore && before) out.push('Noted that you already wore that one, so its pieces stay out.');
     if (ui.relaxed && !c.logged) out.push(ui.relaxed);
@@ -226,20 +229,27 @@ async function answer(text, over = {}) {
     p.exclude = [...new Set(p.exclude.concat(p.avoid))];
     for (const k of Object.keys(p.allow)) { p.allow[k] = p.allow[k].filter((id) => !p.avoid.includes(id)); if (!p.allow[k].length) delete p.allow[k]; }
   }
-  ui.ask = p; ui.date = p.date; ui.occ = p.occ; ui.locks = {}; ui.idx = 0; ui.askDay = today();
+  // the first message, then every change made after it, so each one can be seen and taken back
+  p.first = over.first != null ? over.first : p.text;
+  p.steps = over.steps || [];
+  p.base = over.base || { avoid: (p.avoid || []).slice(), worn: (p.worn || []).slice() };
+  if (over.undo) p.undo = over.undo;
+  if (!over.steps) ui.prevMock = null;
+  ui.ask = p; ui.date = p.date; ui.occ = p.occ; ui.locks = over.keepLocks ? ui.locks : {}; ui.idx = 0; ui.askDay = today();
   ui.editing = !!e && (!!over.editing || !fitsAsk(logged, p));
   ui.mode = 'fit'; ui.tab = 'fit'; closeSheet();
-  if (over.shown) p.shown = over.shown;
   await present(over.prefer || null, () => respond(before, over.latest || null));
   window.scrollTo(0, 0);
 }
+// While a new mockup is made for a changed fit, the last one stays on screen instead of a blank.
+function keepMock() { const c = current(); const mk = c.o ? mockFor(c.o) : null; if (mk) ui.prevMock = mk.blob; }
 // Words in the Change box that mean "not what is on screen": the whole fit, or one named piece of it.
 const CHANGE_ALL = /\b(change it|change this|change (?:the |this |my )?(?:fit|look|outfit)|something else|something different|(?:a )?different (?:fit|look|outfit|one)|another (?:one|fit|look|outfit)|not this|(?:a )?new (?:one|fit|look|outfit)|switch it up|start over|i (?:already )?wore (?:this|that|it)|wore (?:this|that|it)|worn (?:this|that|it))\b/;
 const CHANGE_ONE = /\b(?:change|different|another|other|swap|switch|new|replace|lose|drop)(?: out)?(?: the| my| that| those| these| a| an)? (jackets?|blazers?|suits?|coats?|shirts?|tops?|polos?|sweaters?|tees?|pants|trousers|jeans|slacks|chinos|shoes|loafers|sneakers|belts?|watch(?:es)?|hats?|socks|glasses)\b/g;
 const slotOfWord = (w) => (/^(jacket|blazer|suit)/.test(w) ? 'jacket' : /^coat/.test(w) ? 'coat' : /^(shirt|top|polo|sweater|tee)/.test(w) ? 'top' : /^(pants|trousers|jeans|slacks|chinos)/.test(w) ? 'bottom' : /^(shoes|loafers|sneakers)/.test(w) ? 'shoes' : /^belt/.test(w) ? 'belt' : /^watch/.test(w) ? 'watch' : /^hat/.test(w) ? 'hat' : /^glasses/.test(w) ? 'glasses' : 'socks');
 function avoidFrom(text, o, prior) {
   const out = new Set(prior || []);
-  if (!o) return { ids: [...out], one: false, whole: false };
+  if (!o) return { ids: [...out], one: false, whole: false, slots: [] };
   const t = String(text).toLowerCase().replace(/[\u2018\u2019']/g, '');
   const have = { jacket: o.suit || (o.jacket !== 'none' ? o.jacket : null), top: o.top, bottom: o.suit ? null : o.bottom, shoes: o.shoes, belt: o.belt !== 'none' ? o.belt : null, watch: o.watch, hat: o.hat, coat: o.coat, socks: o.socks, glasses: o.glasses };
   const slots = new Set();
@@ -248,14 +258,14 @@ function avoidFrom(text, o, prior) {
   if (!slots.size && (CHANGE_ALL.test(t) || /\b(?:wore|worn)\b[^.,;!?]*\b(?:this|that|it|same)\b|\bsame (?:outfit|fit|look|thing|one)\b/.test(t))) ['jacket', 'top', 'bottom', 'shoes'].forEach((k) => slots.add(k));
   const one = slots.size > 0 && !(slots.size === 4 && CHANGE_ALL.test(t));
   for (const k of slots) if (have[k]) out.add(have[k]);
-  return { ids: [...out], one, whole: slots.size > 0 && !one };   // one: a single piece was named. whole: the fit as a whole should change
+  return { ids: [...out], one, whole: slots.size > 0 && !one, slots: [...slots] };   // one: a single piece was named. whole: the fit as a whole should change
 }
 function openDay(date, occ, extra) {
   ui.ask = blankAsk(date, occ, extra); ui.date = date; ui.occ = occ; ui.locks = {}; ui.idx = 0; ui.editing = !!(extra && extra.editing); ui.askDay = today();
   ui.mode = 'fit'; ui.tab = 'fit'; closeSheet();
   return present();
 }
-function backToAsk() { ui.mode = 'ask'; ui.ask = null; ui.draft = ''; ui.when = null; ui.date = today(); ui.occ = null; ui.locks = {}; ui.results = []; ui.editing = false; ui.loading = ''; }
+function backToAsk() { ui.mode = 'ask'; ui.ask = null; ui.draft = ''; ui.refineDraft = ''; ui.prevMock = null; ui.when = null; ui.date = today(); ui.occ = null; ui.locks = {}; ui.results = []; ui.editing = false; ui.loading = ''; }
 function mockKey(o) { return E.signature(o); }
 function mockFor(o) { const m = (st().mockups || {})[mockKey(o)]; return m || null; }
 // The fit is shown as a ChatGPT mockup of the wearer, not a sketch. With a key saved the app makes it by itself.
@@ -388,7 +398,7 @@ let sessionTimer = null;
 function saveSession() {
   clearTimeout(sessionTimer);
   sessionTimer = setTimeout(() => {
-    const snap = ui.mode === 'fit' && ui.ask && !ui.loading ? { at: Date.now(), ask: ui.ask, date: ui.date, occ: ui.occ, locks: ui.locks, idx: ui.idx, editing: ui.editing, relaxed: ui.relaxed, fits: ui.results.map((r) => ({ o: r.o, why: r.why })) } : null;
+    const snap = ui.mode === 'fit' && ui.ask && !ui.loading ? { at: Date.now(), ask: ui.ask, date: ui.date, occ: ui.occ, locks: ui.locks, idx: ui.idx, editing: ui.editing, relaxed: ui.relaxed, tab: ui.tab, fits: ui.results.map((r) => ({ o: r.o, why: r.why })) } : null;
     S.kvSet('session', snap).catch(() => {});
   }, 300);
 }
@@ -466,18 +476,28 @@ function viewAsk() {
 function askBar() {
   const a = ui.ask, occ = E.OCCASIONS[ui.occ] || E.OCCASIONS.casual;
   const also = (a.also || []).filter((k) => E.OCCASIONS[k] && k !== ui.occ);
-  const said = a.shown || a.text ? `<q>${esc(a.shown || a.text)}</q>` : esc(a.label || '');
-  const again = '<button class="link" data-act="askAgain">New question</button>';
+  const first = a.first != null ? a.first : a.text;
+  const said = first ? `<q>${esc(first)}</q>` : esc(a.label || '');
+  // every change made so far: the ones typed, and the pieces swapped by hand. Each can be taken back.
+  const c = current();
+  const typed = (a.steps || []).map((x, i) => `<button class="chip took" data-act="dropStep" data-i="${i}" aria-label="Take back: ${esc(x.t)}"><span>${esc(x.t)}</span><b aria-hidden="true">×</b></button>`);
+  const swapped = c.logged ? [] : Object.entries(ui.locks).map(([slot, id]) => {
+    const it = id && id !== 'none' ? item(id) : null;
+    const label = `${E.SLOT_LABEL[slot] || 'Tuck'}: ${it ? (it.short || it.name) : slot === 'tuck' ? id : 'none'}`;
+    return `<button class="chip took" data-act="unlock" data-slot="${esc(slot)}" aria-label="Take back: ${esc(label)}"><span>${esc(label)}</span><b aria-hidden="true">×</b></button>`;
+  });
+  const changes = typed.concat(swapped);
   return `<div class="card asked">
-    ${said ? `<div class="asked-top"><div class="said">${said}</div>${again}</div>` : ''}
+    ${said ? `<div class="said">${said}</div>` : ''}
     <div class="pills">
       <label class="pill"><span>${esc(dayWord(ui.date))}</span><input type="date" data-in="pillDate" value="${ui.date}" aria-label="Change the day"></label>
       <button class="pill" data-act="pickOcc">${esc(occ.long)}</button>
       ${also.map((k) => `<span class="pill plain">+ ${esc(E.OCCASIONS[k].long)}</span>`).join('')}
-      ${said ? '' : again}
     </div>
+    ${changes.length ? `<div class="changes"><h3>Your changes <span>${changes.length}</span></h3><div class="chips wrap">${changes.join('')}</div></div>` : ''}
     ${(a.reply || []).length || a.diff ? `<p class="reply">${esc((a.reply || []).concat(a.diff ? [a.diff] : []).join(' '))}</p>` : ((a.notes || []).length ? `<ul class="notes">${a.notes.map((n) => `<li>${esc(n.t)}</li>`).join('')}</ul>` : '')}
-    <div class="refine"><input type="text" id="refineBox" data-enter="refine" enterkeyhint="go" placeholder="Change something" aria-label="Change something about this fit" autocomplete="off"><button class="btn small" data-act="refine">Go</button></div>
+    <div class="refine"><input type="text" id="refineBox" data-in="refineText" data-enter="refine" enterkeyhint="go" placeholder="Change something" aria-label="Change something about this fit" autocomplete="off" value="${esc(ui.refineDraft)}"><button class="btn small" data-act="refine">Go</button></div>
+    <div class="actions"><button class="btn small" data-act="refreshFit">Refresh</button><button class="btn small" data-act="askAgain">Start over</button></div>
   </div>`;
 }
 function rowHtml(r, logged) {
@@ -500,8 +520,8 @@ function verifiedLine(checks) {
 function photoSlot(o, mk, ph) {
   if (ph.kind === 'photo') return `<div class="photo" data-act="mockup"><img data-blob="${esc(mk.blob)}" alt="Mockup of this fit on you"><span class="visual-tag">ChatGPT mockup</span></div>`;
   if (ph.kind === 'making' || ph.kind === 'queued') {
-    const me = (st().modelPhotos || [])[0];
-    return `<div class="photo making" data-act="mockup">${me ? `<img data-blob="${esc(me)}" alt="">` : ''}<div class="making-text"><div class="spinner"></div><b>ChatGPT is dressing you in this fit</b><span>${maker() === 'mac' ? 'Made on your Mac. About a minute. Keep the app open.' : 'About a minute. Keep the app open.'}</span></div></div>`;
+    const me = ui.prevMock || (st().modelPhotos || [])[0];
+    return `<div class="photo making${ui.prevMock ? ' prev' : ''}" data-act="mockup">${me ? `<img data-blob="${esc(me)}" alt="">` : ''}<div class="making-text"><div class="spinner"></div><b>${ui.prevMock ? 'Updating your mockup with the change' : 'ChatGPT is dressing you in this fit'}</b><span>${maker() === 'mac' ? 'Made on your Mac. About a minute. Keep the app open.' : 'About a minute. Keep the app open.'}</span></div></div>`;
   }
   const box = (title, text, buttons) => `<div class="photo-setup"><b>${title}</b><span>${text}</span><div class="actions wrap">${buttons}</div></div>`;
   const app = '<button class="btn small" data-act="mockup">Use the ChatGPT app</button>';
@@ -753,7 +773,7 @@ function sheetAdd() {
 
 // ---------- actions ----------
 const A = {
-  tab: (d) => { if (d.tab === 'fit' && ui.tab === 'fit' && ui.mode === 'fit' && !ui.sheet) backToAsk(); ui.tab = d.tab; closeSheet(); render(); window.scrollTo(0, 0); },
+  tab: (d) => { ui.tab = d.tab; closeSheet(); render(); window.scrollTo(0, 0); },
   askGo: () => {
     const box = $('#askBox'); const v = ((box ? box.value : ui.draft) || '').trim();
     if (!v) { toast('Say what it is for, or tap one below.'); return null; }
@@ -764,8 +784,9 @@ const A = {
   askWhen: (d) => { ui.when = d.date; ui.date = d.date; render(); },
   askAgain: () => { backToAsk(); closeSheet(); render(); window.scrollTo(0, 0); },
   refine: () => {
-    const box = $('#refineBox'); const v = ((box && box.value) || '').trim();
+    const box = $('#refineBox'); const v = ((box && box.value) || ui.refineDraft || '').trim();
     if (!v || !ui.ask) return null;
+    ui.refineDraft = '';
     const a = ui.ask;
     const probe = parseAsk(v, { today: today(), date: ui.date, items: st().items, profile: st().profile });
     // "change it" or "different shoes" keeps what is on screen out of the next fit, unless this very message asks for that piece by name
@@ -776,19 +797,51 @@ const A = {
     // a follow up holds the rest of the look, unless it asks for a different fit altogether or a different dress level
     const prefer = now && !av.whole && !probe.wore && !(probe.mods && probe.mods.shift) ? now : null;
     const worn = (a.worn || []).concat(probe.wore && now ? mainIds(now).filter((id) => !named.has(id)) : []);
+    keepMock();
+    const touched = new Set(av.slots.concat(Object.keys(probe.locks), Object.keys(probe.allow)));
+    for (const k of Object.keys(ui.locks)) if (av.whole || probe.wore || touched.has(k) || avoid.includes(ui.locks[k])) delete ui.locks[k];
     if (probe.occSaid) return answer(v, { date: ui.date, editing: true, avoid, worn, prefer, before: now });    // a new occasion is a new question, same day unless a day is named
-    return answer(a.text ? a.text + '. ' + v : v, { date: probe.dateSaid ? probe.date : ui.date, fixDate: true, occ: ui.occ, forceOcc: true, also: a.also, editing: true, label: a.label, avoid, worn, prefer, before: now, latest: probe, shown: v });
+    const steps = (a.steps || []).concat([{ t: v, avoid: avoid.filter((id) => !(a.avoid || []).includes(id)), worn: worn.filter((id) => !(a.worn || []).includes(id)) }]);
+    const first = a.first != null ? a.first : a.text;
+    return answer([first].concat(steps.map((x) => x.t)).filter(Boolean).join('. '), { date: probe.dateSaid ? probe.date : ui.date, fixDate: true, occ: ui.occ, forceOcc: true, also: a.also, editing: true, label: a.label, avoid, worn, prefer, before: now, latest: probe, steps, first, base: a.base || { avoid: [], worn: [] }, keepLocks: true });
+  },
+  // take one typed change back: everything else that was asked still holds
+  dropStep: (d) => {
+    const a = ui.ask, i = Number(d.i);
+    if (!a || !(a.steps || [])[i]) return null;
+    const gone = a.steps[i], steps = a.steps.filter((x, k) => k !== i);
+    const base = a.base || { avoid: [], worn: [] };
+    const avoid = [...new Set(base.avoid.concat(...steps.map((x) => x.avoid || [])))];
+    const worn = [...new Set(base.worn.concat(...steps.map((x) => x.worn || [])))];
+    const first = a.first != null ? a.first : a.text;
+    const now = current().o;
+    // the look holds, except that a piece this change had pushed out is welcome back
+    const prefer = Object.assign({}, now);
+    for (const id of gone.avoid || []) { const it = item(id); const slot = it ? (it.cat === 'suit' ? 'jacket' : it.cat) : ''; if (['jacket', 'top', 'bottom', 'shoes'].includes(slot)) prefer[slot] = id; }
+    keepMock();
+    return answer([first].concat(steps.map((x) => x.t)).filter(Boolean).join('. '), { date: ui.date, fixDate: true, occ: ui.occ, forceOcc: true, also: a.also, editing: true, label: a.label, avoid, worn, prefer, before: now, latest: { mods: {}, locks: {}, allow: {}, exclude: [], notes: [] }, undo: gone.t, steps, first, base, keepLocks: true });
+  },
+  // look again at the same fit: fresh weather, the checks rerun, and the mockup asked for again if it never came
+  refreshFit: async () => {
+    const was = ui.forecast ? ui.forecast.at : 0;
+    toast('Checking again');
+    ui.forecast = await loadForecast(st().profile, true);
+    reaudit();
+    const c = current(); if (c.o) { auto.failed.delete(mockKey(c.o)); auto.retried.delete(mockKey(c.o)); }
+    render();
+    toast(ui.forecast.at && ui.forecast.at !== was ? `Checked again at ${E.clockLabel(ui.forecast.at)}. The fit is unchanged.` : 'No connection. The fit and the last forecast stay as they are.', 4000);
   },
   pickOcc: () => openSheet({ type: 'occ' }),
   toChecks: () => { const el = $('.checks'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
   setOcc: (d) => {
     const a = ui.ask; if (!a || !E.OCCASIONS[d.occ]) return null;
     a.occ = d.occ; a.occSaid = true; a.pinned = true; a.also = (a.also || []).filter((k) => k !== d.occ); a.notes = (a.notes || []).filter((n) => n.k === 'missing' || n.k === 'avoid');
-    ui.occ = d.occ; ui.locks = {}; ui.editing = false; closeSheet();
+    keepMock();
+    ui.occ = d.occ; ui.editing = false; closeSheet();
     return present(null, () => respond(null));
   },
-  another: () => { if (ui.results.length) { ui.idx = (ui.idx + 1) % ui.results.length; dropDiff(); render(); } },
-  clearLocks: () => { ui.locks = {}; recompute(); dropDiff(); render(); },
+  another: () => { if (ui.results.length) { keepMock(); ui.idx = (ui.idx + 1) % ui.results.length; dropDiff(); render(); } },
+  clearLocks: () => { keepMock(); ui.locks = {}; recompute(); dropDiff(); render(); },
   swap: (d) => {
     const c = current(); if (!c.o) return;
     const b = brief();
@@ -797,11 +850,12 @@ const A = {
   },
   pickAlt: (d) => {
     const prev = current().o;
+    keepMock();
     ui.locks[d.slot] = d.id;
     if (d.slot === 'jacket') { const it = item(d.id); if (it && it.cat === 'suit') delete ui.locks.bottom; }
     recompute(prev); dropDiff(); closeSheet(); render();
   },
-  unlock: (d) => { const prev = current().o; delete ui.locks[d.slot]; recompute(prev); dropDiff(); closeSheet(); render(); },
+  unlock: (d) => { const prev = current().o; keepMock(); delete ui.locks[d.slot]; recompute(prev); dropDiff(); closeSheet(); render(); },
   lockIn: () => {
     const c = current(); if (!c.o) return;
     const occ = E.OCCASIONS[ui.occ];
@@ -978,10 +1032,12 @@ async function doImport(obj) {
 const IN = {
   q: (el) => { ui.q = el.value; const v = $('#view'); const pos = el.selectionStart; v.innerHTML = viewCloset(); hydrateImages(v); const n = $('[data-in="q"]'); n.focus(); n.setSelectionRange(pos, pos); },
   askText: (el) => { ui.draft = el.value; },
+  refineText: (el) => { ui.refineDraft = el.value; },
   askDate: (el) => { if (el.value) { ui.when = el.value; ui.date = el.value; render(); } },
   pillDate: (el) => {
     const a = ui.ask; if (!el.value || !a) return null;
-    return answer(a.text, Object.assign({ date: el.value, fixDate: true, label: a.label, avoid: a.avoid, worn: a.worn }, a.pinned ? { occ: ui.occ, forceOcc: true, also: a.also } : {}));
+    keepMock();
+    return answer(a.text, Object.assign({ date: el.value, fixDate: true, label: a.label, avoid: a.avoid, worn: a.worn, steps: a.steps || [], first: a.first != null ? a.first : a.text, base: a.base, keepLocks: true }, a.pinned ? { occ: ui.occ, forceOcc: true, also: a.also } : {}));
   },
   quality: (el) => { st().settings.quality = el.value; S.save(); },
   auto: (el) => { st().settings.auto = el.checked; S.save(); },
@@ -998,7 +1054,7 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act]'); if (!t || t.disabled) return;
   const fn = A[t.dataset.act]; if (fn) { e.preventDefault(); Promise.resolve(fn(t.dataset, t)).catch((err) => fail(err)); }
 });
-const LIVE = ['q', 'askText'];
+const LIVE = ['q', 'askText', 'refineText'];
 const fail = (err) => { console.error(err); ui.loading = ''; toast('Something went wrong. Try again.'); };
 document.addEventListener('input', (e) => { const t = e.target.closest('[data-in]'); if (t && LIVE.includes(t.dataset.in)) IN[t.dataset.in](t); });
 document.addEventListener('change', (e) => { const t = e.target.closest('[data-in]'); if (t && !LIVE.includes(t.dataset.in) && IN[t.dataset.in]) Promise.resolve(IN[t.dataset.in](t)).catch(fail); });
@@ -1009,16 +1065,15 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- boot ----------
-const AWAY_MS = 10 * 60 * 1000;
 async function boot() {
   await S.loadState();
   E.configure(st().profile);
   ui.hasKey = !!(await S.secretGet('openai').catch(() => null));
   ui.link = await L.derive(st().profile).catch(() => null);
-  // Coming straight back (from ChatGPT, say) returns to the fit that was open. Otherwise the app starts on the question.
+  // The fit that was open comes back exactly as it was left, however long ago. Only Start over returns to the question.
   const snap = await S.kvGet('session').catch(() => null);
-  if (snap && snap.ask && Date.now() - snap.at < AWAY_MS && snap.date >= today() && E.OCCASIONS[snap.occ] && st().items.length) {
-    Object.assign(ui, { mode: 'fit', ask: snap.ask, date: snap.date, occ: snap.occ, locks: snap.locks || {}, editing: !!snap.editing, relaxed: snap.relaxed || '' });
+  if (snap && snap.ask && E.OCCASIONS[snap.occ] && st().items.length) {
+    Object.assign(ui, { mode: 'fit', ask: snap.ask, date: snap.date, occ: snap.occ, locks: snap.locks || {}, editing: !!snap.editing, relaxed: snap.relaxed || '', tab: snap.tab || 'fit' });
     // the same fits come back, not a new pick
     if (Array.isArray(snap.fits) && snap.fits.length) { ui.results = snap.fits.filter((f) => f && f.o && item(f.o.top) && item(f.o.shoes)).map((f) => ({ score: 0, o: f.o, why: f.why || [], checks: [], flags: [] })); reaudit(); }
     else recompute();
@@ -1041,13 +1096,10 @@ async function boot() {
     });
     navigator.serviceWorker.register('sw.js').then((reg) => { ui.sw = reg; }).catch(() => {});
   }
-  let hiddenAt = 0;
   document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState !== 'visible') { hiddenAt = Date.now(); return; }
+    if (document.visibilityState !== 'visible') return;
     if (ui.sw) ui.sw.update().catch(() => {});
     findMac();
-    const away = hiddenAt && Date.now() - hiddenAt > AWAY_MS;
-    if ((ui.askDay !== today() || (away && ui.mode === 'fit')) && !ui.sheet && !ui.busy) { ui.askDay = today(); backToAsk(); }   // after time away, or on a new day, it starts with the question again
     ui.forecast = await loadForecast(st().profile);
     if (ui.mode === 'fit' && !ui.sheet) reaudit();
     refresh();
