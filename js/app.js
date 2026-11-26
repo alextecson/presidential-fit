@@ -7,7 +7,7 @@ import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
 import { parseAsk, windowFor } from './ask.js';
 import * as L from './link.js';
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -100,6 +100,11 @@ function recompute(prefer) {
     }
   }
   ui.results = r; ui.idx = 0;
+}
+// Fresh weather re-runs the checks on the fits already shown. It never swaps the clothes under the wearer.
+function reaudit() {
+  const c = ctx();
+  for (const r of ui.results) { r.checks = E.audit(c, r.o); r.flags = r.checks.filter((x) => x.level === 'bad' || x.level === 'note').map((x) => x.t); }
 }
 // Never hand over a fit on an old forecast: fetch a fresh one first when a connection is there.
 async function present(prefer) {
@@ -297,7 +302,7 @@ let sessionTimer = null;
 function saveSession() {
   clearTimeout(sessionTimer);
   sessionTimer = setTimeout(() => {
-    const snap = ui.mode === 'fit' && ui.ask && !ui.loading ? { at: Date.now(), ask: ui.ask, date: ui.date, occ: ui.occ, locks: ui.locks, idx: ui.idx, editing: ui.editing } : null;
+    const snap = ui.mode === 'fit' && ui.ask && !ui.loading ? { at: Date.now(), ask: ui.ask, date: ui.date, occ: ui.occ, locks: ui.locks, idx: ui.idx, editing: ui.editing, relaxed: ui.relaxed, fits: ui.results.map((r) => ({ o: r.o, why: r.why })) } : null;
     S.kvSet('session', snap).catch(() => {});
   }, 300);
 }
@@ -836,7 +841,7 @@ const A = {
   refreshWeather: async () => {
     const was = ui.forecast ? ui.forecast.at : 0;
     ui.forecast = await loadForecast(st().profile, true);
-    if (ui.mode === 'fit') recompute();
+    if (ui.mode === 'fit') reaudit();
     refresh(); toast(ui.forecast.at && ui.forecast.at !== was ? 'Weather updated.' : 'No connection. Using the last forecast.');
   },
   importFile: async () => {
@@ -925,13 +930,16 @@ async function boot() {
   // Coming straight back (from ChatGPT, say) returns to the fit that was open. Otherwise the app starts on the question.
   const snap = await S.kvGet('session').catch(() => null);
   if (snap && snap.ask && Date.now() - snap.at < AWAY_MS && snap.date >= today() && E.OCCASIONS[snap.occ] && st().items.length) {
-    Object.assign(ui, { mode: 'fit', ask: snap.ask, date: snap.date, occ: snap.occ, locks: snap.locks || {}, editing: !!snap.editing });
-    recompute(); ui.idx = Math.min(snap.idx || 0, Math.max(0, ui.results.length - 1));
+    Object.assign(ui, { mode: 'fit', ask: snap.ask, date: snap.date, occ: snap.occ, locks: snap.locks || {}, editing: !!snap.editing, relaxed: snap.relaxed || '' });
+    // the same fits come back, not a new pick
+    if (Array.isArray(snap.fits) && snap.fits.length) { ui.results = snap.fits.filter((f) => f && f.o && item(f.o.top) && item(f.o.shoes)).map((f) => ({ score: 0, o: f.o, why: f.why || [], checks: [], flags: [] })); reaudit(); }
+    else recompute();
+    ui.idx = Math.min(snap.idx || 0, Math.max(0, ui.results.length - 1));
   }
   render();
   findMac();
   ui.forecast = await loadForecast(st().profile);
-  if (ui.mode === 'fit') { const keep = ui.idx; recompute(); ui.idx = Math.min(keep, Math.max(0, ui.results.length - 1)); }
+  if (ui.mode === 'fit') reaudit();
   refresh();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     // A new release takes over on its own: the page reloads once when the new files are in place.
@@ -953,7 +961,7 @@ async function boot() {
     const away = hiddenAt && Date.now() - hiddenAt > AWAY_MS;
     if ((ui.askDay !== today() || (away && ui.mode === 'fit')) && !ui.sheet && !ui.busy) { ui.askDay = today(); backToAsk(); }   // after time away, or on a new day, it starts with the question again
     ui.forecast = await loadForecast(st().profile);
-    if (ui.mode === 'fit' && !ui.sheet) { const keep = ui.idx; recompute(); ui.idx = Math.min(keep, Math.max(0, ui.results.length - 1)); }
+    if (ui.mode === 'fit' && !ui.sheet) reaudit();
     refresh();
   });
 }
