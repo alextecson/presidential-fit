@@ -288,6 +288,7 @@ export function solve(ctx, opts = {}) {
     if (isSuit) { score += occ.formalDay || ctx.occ === 'dressy' ? 3.4 : (bandHi >= 5 ? 2.2 : -2.5); if ((top.formality || 3) < 3) score -= 4; if ((shoes.formality || 3) < 3.5) score -= 3; }
     if (jacket && bottom.athletic && !jacket.unstructured) score -= 7;       // no athletic fabric under a structured jacket
     if (jacket && jacket.loungeFav && inPlan('lounge')) score += 1.5;
+    if (jacket && jacket.casual && ['dinner', 'work', 'dressy'].includes(ctx.occ) && shift > -1 && !asked.has(jacket.id)) score -= 2.5;   // a sit down setting gets a tailored jacket unless he names another
     const ACCENTS = ['pink', 'red', 'lavender', 'green', 'sage', 'mustard', 'burgundy', 'purple'];
     const accentN = [jacket, top, bottom, shoes].filter((x) => x && ACCENTS.includes(x.color)).length;
     if (accentN > 1) score -= 3 * (accentN - 1);                             // one accent colour at most
@@ -317,9 +318,9 @@ export function solve(ctx, opts = {}) {
     else if (brownShoes) { if (bottom.color === 'black') score -= 3.5; else score += 1; }
     if (night) { if (bC.d <= 2) score -= 1.2; else if (bC.d >= 6) score += 0.3; }   // evening reads darker
     if (worn.length) {                                                       // a change has to look like a change
-      if (echoes(jacket, 'jacket')) score -= 3.5;
-      if (echoes(top, 'top')) score -= 3.5;
-      if (!isSuit && echoes(bottom, 'bottom')) score -= 2;
+      if (echoes(jacket, 'jacket')) score -= 6;
+      if (echoes(top, 'top')) score -= 6;
+      if (!isSuit && echoes(bottom, 'bottom')) score -= 2.5;
       if (echoes(shoes, 'shoes')) score -= 1;
     }
     if (mods.theme) {
