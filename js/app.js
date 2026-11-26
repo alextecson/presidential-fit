@@ -5,7 +5,7 @@ import * as M from './mockup.js';
 import { figureSvg } from './figure.js';
 import { loadForecast, weatherFor, today } from './weather.js';
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ui = {
@@ -333,7 +333,7 @@ function sheetMockup(s) {
       <button class="btn${ui.hasKey ? '' : ' primary'}" data-act="handOff">Open in my ChatGPT app</button>
       <button class="btn" data-act="attachMock">Add the finished image</button>
     </div>
-    <p class="fine">${ui.hasKey ? 'Created in the app with your OpenAI key.' : 'Your photo goes to the share sheet and the prompt is copied. Pick ChatGPT, paste, send. Save the image, then add it here.'}</p>
+    <p class="fine">${ui.hasKey ? 'Created in the app with your OpenAI key.' : 'Your photo opens in the share sheet and the prompt is copied. Swipe the app row to ChatGPT, paste, send. Save the image, then add it here.'}</p>
     <details class="prompt"><summary>Show the prompt</summary><pre>${esc(M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', Math.min(photos.length, 3)))}</pre><button class="btn small" data-act="copyPrompt">Copy prompt</button></details>`;
 }
 function sheetPaste() {

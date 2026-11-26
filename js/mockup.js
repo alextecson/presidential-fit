@@ -43,6 +43,7 @@ export function buildPrompt(o, items, profile, sceneKey = 'auto', photoCount = 1
     'Dress him in exactly this outfit and nothing else:',
     ...lines.map((l) => '- ' + l),
     'Fit: slim but not skinny, jacket shoulders exact, a quarter inch of shirt cuff showing, trousers with a slight break or none. Clothes pressed and lint free.',
+    'If his reference is a mirror selfie, leave out the mirror, its frame and the phone, and show him directly with his hands relaxed at his sides.',
     'Any extra reference photos after his are his actual garments: match their color, cloth and details exactly.',
     `Setting: ${scene}.`,
     'Framing: vertical, head to toe including the shoes, standing naturally, relaxed posture, eye level camera, 50mm lens look, natural light, true to life color. No text, no watermark, no extra people, no added logos.',
