@@ -1,0 +1,249 @@
+{
+ "kind": "presidential-fit-backup",
+ "state": {
+  "version": 1,
+  "profile": {
+   "name": "",
+   "city": "",
+   "lat": 40.71,
+   "lon": -74.01,
+   "tz": "America/New_York",
+   "groups": [],
+   "occasions": {},
+   "scenes": {},
+   "cars": [],
+   "about": ""
+  },
+  "items": [
+   {
+    "id": "w1",
+    "cat": "watch",
+    "name": "Gold dress watch",
+    "color": "gold",
+    "formality": 5,
+    "metal": "gold",
+    "short": "gold watch",
+    "status": "active"
+   },
+   {
+    "id": "w2",
+    "cat": "watch",
+    "name": "Steel sports watch",
+    "color": "silver",
+    "formality": 4,
+    "metal": "silver",
+    "short": "steel watch",
+    "status": "active"
+   },
+   {
+    "id": "g1",
+    "cat": "glasses",
+    "name": "Tortoiseshell frames",
+    "color": "tortoise",
+    "formality": 3,
+    "metal": "tortoise",
+    "status": "active"
+   },
+   {
+    "id": "g2",
+    "cat": "glasses",
+    "name": "Silver frames",
+    "color": "silver",
+    "formality": 3,
+    "metal": "silver",
+    "status": "active"
+   },
+   {
+    "id": "b1",
+    "cat": "belt",
+    "name": "Dark brown belt, gold buckle",
+    "color": "dark-brown",
+    "formality": 3,
+    "metal": "gold",
+    "leather": "dark-brown",
+    "status": "active"
+   },
+   {
+    "id": "b2",
+    "cat": "belt",
+    "name": "Black belt, silver buckle",
+    "color": "black",
+    "formality": 3,
+    "metal": "silver",
+    "leather": "black",
+    "status": "active"
+   },
+   {
+    "id": "s1",
+    "cat": "shoes",
+    "name": "Dark brown penny loafers",
+    "color": "dark-brown",
+    "formality": 3.5,
+    "leather": "dark-brown",
+    "sub": "loafer",
+    "status": "active"
+   },
+   {
+    "id": "s2",
+    "cat": "shoes",
+    "name": "Black cap toe oxfords",
+    "color": "black",
+    "formality": 4,
+    "leather": "black",
+    "sub": "oxford",
+    "status": "active"
+   },
+   {
+    "id": "s3",
+    "cat": "shoes",
+    "name": "White leather sneakers",
+    "color": "white",
+    "formality": 2,
+    "leather": "none",
+    "sub": "sneaker",
+    "status": "active"
+   },
+   {
+    "id": "t1",
+    "cat": "top",
+    "name": "Cream knit polo",
+    "color": "cream",
+    "formality": 3,
+    "sub": "knit-polo",
+    "untuckOk": true,
+    "warmth": 2,
+    "status": "active"
+   },
+   {
+    "id": "t2",
+    "cat": "top",
+    "name": "Light blue Oxford shirt",
+    "color": "light-blue",
+    "formality": 4,
+    "sub": "ocbd",
+    "untuckOk": false,
+    "status": "active"
+   },
+   {
+    "id": "t3",
+    "cat": "top",
+    "name": "White dress shirt",
+    "color": "white",
+    "formality": 5,
+    "sub": "dress-shirt",
+    "untuckOk": false,
+    "status": "active"
+   },
+   {
+    "id": "t4",
+    "cat": "top",
+    "name": "Navy polo",
+    "color": "navy",
+    "formality": 2,
+    "sub": "polo",
+    "untuckOk": true,
+    "status": "active"
+   },
+   {
+    "id": "p1",
+    "cat": "bottom",
+    "name": "Dark indigo jeans",
+    "color": "indigo",
+    "formality": 2.5,
+    "sub": "jeans",
+    "loops": true,
+    "status": "active"
+   },
+   {
+    "id": "p2",
+    "cat": "bottom",
+    "name": "Charcoal trousers",
+    "color": "charcoal",
+    "formality": 4,
+    "loops": true,
+    "status": "active"
+   },
+   {
+    "id": "p3",
+    "cat": "bottom",
+    "name": "Khaki chinos",
+    "color": "khaki",
+    "formality": 3,
+    "loops": true,
+    "status": "active"
+   },
+   {
+    "id": "j1",
+    "cat": "jacket",
+    "name": "Navy blazer",
+    "color": "navy",
+    "formality": 4,
+    "warmth": 2,
+    "status": "active"
+   },
+   {
+    "id": "j2",
+    "cat": "jacket",
+    "name": "Tan unstructured jacket",
+    "color": "tan",
+    "formality": 3,
+    "unstructured": true,
+    "warmth": 1,
+    "status": "active"
+   },
+   {
+    "id": "su1",
+    "cat": "suit",
+    "name": "Charcoal suit",
+    "color": "charcoal",
+    "formality": 5,
+    "loops": true,
+    "status": "active"
+   },
+   {
+    "id": "k1",
+    "cat": "socks",
+    "name": "Black mid calf socks",
+    "color": "black",
+    "formality": 4,
+    "status": "active"
+   },
+   {
+    "id": "k2",
+    "cat": "socks",
+    "name": "Navy mid calf socks",
+    "color": "navy",
+    "formality": 4,
+    "status": "active"
+   },
+   {
+    "id": "k3",
+    "cat": "socks",
+    "name": "No show socks",
+    "color": "white",
+    "formality": 1,
+    "sub": "no-show",
+    "status": "active"
+   }
+  ],
+  "rules": [
+   {
+    "group": "How it works",
+    "items": [
+     "The watch sets the metal: gold watch, gold buckle. Steel watch, silver buckle.",
+     "Belt leather matches shoe leather.",
+     "Tucked with visible loops needs a belt.",
+     "No repeats for the same group."
+    ]
+   }
+  ],
+  "wears": [],
+  "settings": {
+   "quality": "medium",
+   "model": "gpt-image-2.6-sunburst",
+   "setting": "auto"
+  },
+  "modelPhotos": []
+ },
+ "images": {}
+}

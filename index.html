@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Presidential Fit</title>
+<meta name="description" content="A personal stylist that builds outfits only from your own closet, under your own rules.">
+<meta name="theme-color" content="#0c1017" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f4f7" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fit">
+<meta name="format-detection" content="telephone=no">
+<meta name="robots" content="noindex">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true"></span><span>Presidential Fit</span></div>
+    <button class="wx" id="wx" data-act="refreshWeather" aria-label="Weather"></button>
+  </header>
+  <main id="view" tabindex="-1"></main>
+  <nav class="tabs" aria-label="Sections">
+    <button data-act="tab" data-tab="fit" class="on"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3l4 3 4-3 5 4-3 4v10H6V11L3 7z"/></svg><span>Fit</span></button>
+    <button data-act="tab" data-tab="closet"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5a2 2 0 1 1 2 2c-1 0-2 .6-2 2v1l9 6v2H3v-2l9-6"/></svg><span>Closet</span></button>
+    <button data-act="tab" data-tab="log"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v17H5zM9 2v4M15 2v4M5 9h14M8.5 13h3M8.5 17h7"/></svg><span>Log</span></button>
+    <button data-act="tab" data-tab="more"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 12h2M10 12h10M4 17h8M16 17h4"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="14" cy="17" r="2"/></svg><span>More</span></button>
+  </nav>
+  <div id="sheet" class="sheet" hidden></div>
+  <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
+</div>
+<input type="file" id="filePick" hidden>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
