@@ -74,7 +74,7 @@ export const EMPTY_STATE = () => ({
   items: [],
   rules: [],
   wears: [],
-  settings: { quality: 'medium', model: 'gpt-image-2.6-sunburst', setting: 'auto' },
+  settings: { quality: 'medium', model: 'gpt-image-2.6-sunburst', setting: 'auto', auto: true },
   modelPhotos: [],
   seededAt: null,
 });

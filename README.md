@@ -6,6 +6,6 @@ A personal stylist web app for iPhone. It opens on one question, "What is the fi
 - Every fit comes with a check list: the hours it is worn, the live hour by hour weather for those hours, metals, belt and shoes, tuck, dress level, and what each audience has already seen.
 - Works offline once added to the Home Screen. The weather check needs a connection and says so when it has none.
 - Your closet, log, photos and any API key stay on the device. Nothing personal is stored in this repository.
-- Realistic mockups of a fit, with you as the model, are made by ChatGPT's image engine: inside the app with your own OpenAI API key, or by handing the photo and prompt to the ChatGPT app.
+- Each fit is shown as a realistic mockup with you as the model, made by ChatGPT's image engine. With your own OpenAI API key saved, the app makes it by itself about a minute after the fit appears. Without a key it hands the photo and prompt to the ChatGPT app and takes the finished image back by paste.
 
 Open the site in Safari, tap Share, then Add to Home Screen. Load your closet file from More, Your data, Import file.

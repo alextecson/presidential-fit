@@ -6,7 +6,7 @@ import { figureSvg } from './figure.js';
 import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
 import { parseAsk, windowFor } from './ask.js';
 
-const VERSION = '1.1.1';
+const VERSION = '1.2.0';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -141,6 +141,82 @@ function openDay(date, occ, extra) {
 function backToAsk() { ui.mode = 'ask'; ui.ask = null; ui.draft = ''; ui.when = null; ui.date = today(); ui.occ = null; ui.locks = {}; ui.results = []; ui.editing = false; ui.loading = ''; }
 function mockKey(o) { return E.signature(o); }
 function mockFor(o) { const m = (st().mockups || {})[mockKey(o)]; return m || null; }
+// The fit is shown as a ChatGPT mockup of the wearer, not a sketch. With a key saved the app makes it by itself.
+const auto = { timer: null, busy: null, ctl: null, failed: new Map(), retried: new Set() };
+const AUTO_CAP = 12, AUTO_DWELL = 2200;
+const autoLeft = () => { const a = st().settings.autoDay; return AUTO_CAP - (a && a.d === today() ? a.n : 0); };
+function photoState(o, mk) {
+  if (mk) return { kind: 'photo' };
+  const sig = mockKey(o);
+  if (auto.busy === sig || (ui.busy && ui.busySig === sig)) return { kind: 'making' };
+  if (!(st().modelPhotos || []).length) return { kind: 'nophoto', sketch: true };
+  if (!ui.hasKey) return { kind: 'nokey', sketch: true };
+  if (auto.failed.has(sig)) return { kind: 'error', sketch: true, msg: auto.failed.get(sig) };
+  if (navigator.onLine === false) return { kind: 'offline', sketch: true };
+  if (st().settings.auto === false || o.date < today()) return { kind: 'manual', sketch: true };
+  if (autoLeft() <= 0) return { kind: 'cap', sketch: true };
+  return { kind: 'queued' };                                   // it starts by itself in a moment
+}
+// One request to ChatGPT's image engine for one fit, saved against that fit when it comes back.
+async function createMockup(o, { signal, onStage } = {}) {
+  const key = await S.secretGet('openai');
+  if (!key) throw new M.MockupError('Add your OpenAI key in More first.', 'auth');
+  const photos = (st().modelPhotos || []).slice(0, 3);
+  const imgs = [];
+  for (const id of photos) { const b = await S.blobGet(id); if (b) imgs.push(b); }
+  if (!imgs.length) throw new M.MockupError('Add a full length photo of yourself in More first.', 'photo');
+  for (const id of [o.suit || (o.jacket !== 'none' ? o.jacket : null), o.top, o.suit ? null : o.bottom, o.shoes].filter(Boolean)) {
+    const it = item(id); if (it && it.photo && imgs.length < 8) { const b = await S.blobGet(it.photo); if (b) imgs.push(b); }
+  }
+  const prompt = M.buildPrompt(o, st().items, st().profile, st().settings.setting || 'auto', photos.length);
+  let hidden = document.visibilityState === 'hidden', lock = null;
+  const seen = () => { if (document.visibilityState === 'hidden') hidden = true; };
+  document.addEventListener('visibilitychange', seen);
+  try { if (navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); } catch (e) { /* the screen may dim; the request still runs */ }
+  try {
+    const out = await M.generate({ key, model: st().settings.model, quality: st().settings.quality, prompt, images: imgs, signal, onModel: onStage });
+    await saveMock(o, out.blob, out.model);
+    return out;
+  } catch (e) {
+    if (e instanceof M.MockupError && e.kind === 'network' && hidden) throw new M.MockupError('The app went to the background while ChatGPT was working. Keep it open for about a minute.', 'paused');
+    throw e;
+  } finally {
+    document.removeEventListener('visibilitychange', seen);
+    if (lock) lock.release().catch(() => {});
+  }
+}
+function scheduleAuto() {
+  clearTimeout(auto.timer);
+  if (ui.tab !== 'fit' || ui.mode !== 'fit' || ui.loading || auto.busy || ui.busy || !st().items.length) return;
+  const c = current();
+  if (!c.o || (c.logged && !c.o.complete) || photoState(c.o, mockFor(c.o)).kind !== 'queued') return;
+  const sig = mockKey(c.o);
+  auto.timer = setTimeout(() => runAuto(sig, false), AUTO_DWELL);
+}
+// Redraw after a mockup starts or lands, without taking a text box away from someone who is typing in it.
+function settle() {
+  const a = document.activeElement;
+  if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) { auto.stale = true; return; }
+  auto.stale = false; render();
+}
+document.addEventListener('focusout', () => { if (auto.stale) setTimeout(settle, 60); });
+async function runAuto(sig, forced) {
+  if (auto.busy || ui.busy || ui.loading) return;
+  const c = current();
+  if (ui.tab !== 'fit' || ui.mode !== 'fit' || !c.o || mockKey(c.o) !== sig || mockFor(c.o)) return;
+  if (!forced && photoState(c.o, null).kind !== 'queued') return;
+  const o = c.o;
+  auto.busy = sig; auto.ctl = new AbortController(); auto.failed.delete(sig);
+  if (!forced) { const used = AUTO_CAP - autoLeft(); st().settings.autoDay = { d: today(), n: used + 1 }; S.save(); }
+  settle();
+  try { await createMockup(o, { signal: auto.ctl.signal }); }
+  catch (e) {
+    if (e instanceof M.MockupError && e.kind === 'paused' && !auto.retried.has(sig)) auto.retried.add(sig);      // one more try once the app is back in front
+    else auto.failed.set(sig, e && e.name === 'AbortError' ? 'Stopped.' : (e && e.message) || 'That did not work.');
+  }
+  auto.busy = null; auto.ctl = null;
+  settle();
+}
 function swatch(it, big) {
   if (!it) return `<span class="sw none${big ? ' big' : ''}"></span>`;
   const img = it.photo ? `<img data-blob="${esc(it.photo)}" alt="">` : '';
@@ -184,6 +260,7 @@ function render() {
   renderSheet();
   hydrateImages();
   saveSession();
+  scheduleAuto();
 }
 // After something changes in the background: never take the keyboard away from someone who is typing.
 function refresh() {
@@ -275,6 +352,22 @@ function verifiedLine(checks) {
   const clear = checks.filter((c) => c.level === 'ok').length;
   return `<button class="verified${open ? ' open' : ''}" data-act="toChecks"><i aria-hidden="true"></i><span>${esc([when && when.short, wx.short].filter(Boolean).join(' · '))}<b>${open ? `${open} of ${open + clear} checks to look at` : `All ${clear} checks clear`}</b></span></button>`;
 }
+// The top of the fit: the ChatGPT mockup, or what stands between the wearer and having one.
+function photoSlot(o, mk, ph) {
+  if (ph.kind === 'photo') return `<div class="photo" data-act="mockup"><img data-blob="${esc(mk.blob)}" alt="Mockup of this fit on you"><span class="visual-tag">ChatGPT mockup</span></div>`;
+  if (ph.kind === 'making' || ph.kind === 'queued') {
+    const me = (st().modelPhotos || [])[0];
+    return `<div class="photo making" data-act="mockup">${me ? `<img data-blob="${esc(me)}" alt="">` : ''}<div class="making-text"><div class="spinner"></div><b>ChatGPT is dressing you in this fit</b><span>About a minute. Keep the app open.</span></div></div>`;
+  }
+  const box = (title, text, buttons) => `<div class="photo-setup"><b>${title}</b><span>${text}</span><div class="actions wrap">${buttons}</div></div>`;
+  const app = '<button class="btn small" data-act="mockup">Use the ChatGPT app</button>';
+  if (ph.kind === 'nophoto') return box('Your ChatGPT mockup goes here', 'First add a full length photo of yourself. ChatGPT uses it to put each fit on you.', '<button class="btn primary small" data-act="addPhoto">Add my photo</button>');
+  if (ph.kind === 'nokey') return box('Your ChatGPT mockup goes here', 'One step is left, and only you can do it: add your OpenAI key. After that every fit arrives as a photo of you instead of a sketch.', `<button class="btn primary small" data-act="setupKey">Add my key</button>${app}`);
+  if (ph.kind === 'error') return box('ChatGPT did not return the mockup', esc(ph.msg || ''), `<button class="btn primary small" data-act="retryAuto">Try again</button>${app}`);
+  if (ph.kind === 'offline') return box('No connection', 'The mockup is made as soon as you are back online.', '<button class="btn primary small" data-act="retryAuto">Try now</button>');
+  if (ph.kind === 'cap') return box('Automatic mockups are done for today', `${AUTO_CAP} were made by themselves today. This one is made when you ask.`, '<button class="btn primary small" data-act="retryAuto">Create my mockup</button>');
+  return box('See this fit on you', 'ChatGPT puts this fit on you in about a minute.', '<button class="btn primary small" data-act="retryAuto">Create my mockup</button>');
+}
 // Every factor that was checked for this fit, problems first.
 function checksHtml(checks) {
   if (!checks.length) return '';
@@ -300,6 +393,7 @@ function viewFit() {
   } else if (c.o) {
     const rs = E.rows(c.o, st().items);
     const mk = mockFor(c.o);
+    const ph = photoState(c.o, mk);
     const watch = item(c.o.watch);
     document.documentElement.dataset.metal = watch && watch.metal === 'silver' ? 'silver' : 'gold';
     const status = c.logged ? (c.entry.status === 'planned' ? 'Planned' : 'Worn') : (ui.editing ? 'New pick' : 'Suggested');
@@ -309,9 +403,9 @@ function viewFit() {
       ${verifiedLine(c.checks)}
       ${c.logged && c.entry.status === 'planned' && !past ? '<p class="fine">You locked this in earlier. It was checked again just now.</p>' : ''}
       ${!c.logged && ui.relaxed ? `<p class="error">${esc(ui.relaxed)}</p>` : ''}
-      <div class="look${mk ? ' has-photo' : ''}">
-        <div class="visual" data-act="mockup">${mk ? `<img data-blob="${esc(mk.blob)}" alt="Mockup of this fit on you">` : figureSvg(c.o, st().items)}
-          <span class="visual-tag">${mk ? 'ChatGPT mockup' : 'Sketch'}</span></div>
+      ${photoSlot(c.o, mk, ph)}
+      <div class="look${ph.sketch ? '' : ' no-visual'}">
+        ${ph.sketch ? `<div class="visual" data-act="mockup">${figureSvg(c.o, st().items)}<span class="visual-tag">Sketch</span></div>` : ''}
         <div class="rows">${rs.map((r) => rowHtml(r, c.logged)).join('')}</div>
       </div>
       ${c.entry && c.entry.note && c.logged ? `<p class="note">${esc(c.entry.note)}</p>` : ''}
@@ -320,11 +414,11 @@ function viewFit() {
       <div class="actions">
         ${c.logged
           ? `${c.entry.status === 'planned' && (past || isToday) ? '<button class="btn primary" data-act="markWorn">I wore it</button>' : ''}
-             <button class="btn${c.entry.status === 'planned' && (past || isToday) ? '' : ' primary'}" data-act="mockup">${mk ? 'Mockup' : 'See it on me'}</button>
+             <button class="btn${c.entry.status === 'planned' && (past || isToday) ? '' : ' primary'}" data-act="mockup">Mockup</button>
              <button class="btn" data-act="editEntry">Change it</button>`
           : `<button class="btn primary" data-act="lockIn">${past || isToday ? (isToday ? 'Wearing this' : 'I wore this') : 'Lock it in'}</button>
              <button class="btn" data-act="another">Another</button>
-             <button class="btn" data-act="mockup">${mk ? 'Mockup' : 'See it on me'}</button>`}
+             <button class="btn" data-act="mockup">Mockup</button>`}
       </div>
       ${!c.logged && Object.keys(ui.locks).length ? `<button class="link" data-act="clearLocks">Clear my ${Object.keys(ui.locks).length} locked ${Object.keys(ui.locks).length === 1 ? 'piece' : 'pieces'}</button>` : ''}
       ${c.logged ? '<button class="link danger" data-act="removeEntry">Remove from the log</button>' : (c.entry ? '<button class="link" data-act="cancelEdit">Keep the logged fit</button>' : '')}
@@ -377,12 +471,18 @@ function viewMore() {
       <div class="photos">${photos.map((id) => `<div class="ph"><img data-blob="${esc(id)}" alt="Model photo"><button data-act="delPhoto" data-id="${esc(id)}" aria-label="Remove photo">×</button></div>`).join('')}
       ${photos.length < 4 ? '<button class="ph add" data-act="addPhoto"><span>+</span>Add photo</button>' : ''}</div></div></section>
     <section class="sec"><h3>ChatGPT mockups</h3>
-      <div class="card"><p>${ui.hasKey ? 'Mockups are created inside the app with your OpenAI key.' : 'Without a key, the app hands the photo and the exact prompt to your ChatGPT app. Add an OpenAI API key to create mockups right here.'}</p>
+      <div class="card" id="keyCard">${ui.hasKey
+        ? `<p>Each fit arrives as a ChatGPT mockup of you, made with your OpenAI key.</p>
+           <label class="toggle"><input type="checkbox" data-in="auto"${s.auto !== false ? ' checked' : ''}><span>Make the mockup by itself with each fit</span></label>
+           <p class="fine">Up to ${AUTO_CAP} a day by themselves, about a minute each. Cost depends on the quality below.</p>`
+        : `<p>Each fit can arrive as a ChatGPT mockup of you instead of a sketch. That takes your own OpenAI API key, and only you can create it.</p>
+           <ol class="steps"><li>Open OpenAI and sign in with your ChatGPT account.</li><li>Under Billing, add a few dollars of credit.</li><li>Under API keys, create a new secret key and copy it.</li><li>Paste it here and tap Save key.</li></ol>
+           <a class="btn small" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Open OpenAI API keys</a>`}
       <label class="field"><span>OpenAI API key</span><input type="password" id="keyInput" placeholder="${ui.hasKey ? 'Saved on this phone' : 'sk-...'}" autocomplete="off" autocapitalize="off" spellcheck="false" data-in="key"></label>
       <div class="actions"><button class="btn small" data-act="saveKey">Save key</button>${ui.hasKey ? '<button class="btn small" data-act="clearKey">Remove key</button>' : ''}</div>
       <label class="field"><span>Image quality</span><select data-in="quality">${['low', 'medium', 'high'].map((q) => `<option value="${q}"${s.quality === q ? ' selected' : ''}>${q === 'low' ? 'Draft, about 1 cent' : q === 'medium' ? 'Standard, about 5 cents' : 'Best, about 20 cents'}</option>`).join('')}</select></label>
       <label class="field"><span>Model</span><select data-in="model">${M.MODELS.map((m) => `<option value="${m}"${s.model === m ? ' selected' : ''}>${m}</option>`).join('')}</select></label>
-      <p class="fine">The key stays on this phone and is sent only to OpenAI. Key setup: platform.openai.com, API keys. OpenAI may ask you to verify your organization before image models work.</p></div></section>
+      <p class="fine">The key stays on this phone and is sent only to OpenAI. OpenAI may ask you to verify your organization before image models work. Without a key, tap Mockup on a fit to hand it to your ChatGPT app.</p></div></section>
     <section class="sec"><h3>Standing rules</h3><div class="card rules">${(st().rules || []).map((g) => `<details><summary>${esc(g.group)}</summary><ul>${g.items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></details>`).join('') || '<p class="empty">No rules loaded.</p>'}</div></section>
     <section class="sec"><h3>Your data</h3><div class="card">
       <p>${st().items.length} pieces, ${st().wears.length} logged days. Everything is stored on this phone only.</p>
@@ -469,7 +569,7 @@ function sheetMockup(s) {
   const mk = mockFor(c.o);
   const photos = st().modelPhotos || [];
   const sceneSel = `<label class="field"><span>Setting</span><select data-in="scene">${Object.entries(M.scenesFor(st().profile)).map(([k, v]) => `<option value="${k}"${(st().settings.setting || 'auto') === k ? ' selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label>`;
-  if (ui.busy) return `<h2>Putting it on you</h2><div class="busy"><div class="spinner"></div><p>${esc(ui.busy)}</p><p class="fine">This takes about a minute. Keep the app open.</p></div><div class="actions"><button class="btn" data-act="cancelMockup">Cancel</button></div>`;
+  if (ui.busy || auto.busy === mockKey(c.o)) return `<h2>Putting it on you</h2><div class="busy"><div class="spinner"></div><p>${esc(ui.busy || 'ChatGPT is dressing you')}</p><p class="fine">This takes about a minute. Keep the app open.</p></div><div class="actions"><button class="btn" data-act="cancelMockup">Cancel</button></div>`;
   if (!photos.length) return `<h2>See it on you</h2><p>First add a full length photo of yourself. It stays on this phone and is sent to ChatGPT only when you ask for a mockup.</p><div class="actions"><button class="btn primary" data-act="addPhoto">Add my photo</button></div>`;
   return `<h2>${mk ? 'Your mockup' : 'See it on you'}</h2>
     ${mk ? `<div class="mock"><img data-blob="${esc(mk.blob)}" alt="Mockup of this fit on you"></div><div class="actions wrap"><button class="btn small" data-act="shareMock">Save or share</button><button class="btn small danger" data-act="delMock">Remove</button></div>` : ''}
@@ -478,9 +578,10 @@ function sheetMockup(s) {
     <div class="actions col">
       ${ui.hasKey ? `<button class="btn primary" data-act="makeMockup">${mk ? 'Create a new one' : 'Create with ChatGPT'}</button>` : ''}
       <button class="btn${ui.hasKey ? '' : ' primary'}" data-act="handOff">Open in my ChatGPT app</button>
-      <button class="btn" data-act="attachMock">Add the finished image</button>
+      <button class="btn" data-act="pasteMock">Paste the image ChatGPT made</button>
+      <button class="btn" data-act="attachMock">Add the finished image from Photos or Files</button>
     </div>
-    <p class="fine">${ui.hasKey ? 'Created in the app with your OpenAI key.' : 'Your photo opens in the share sheet and the prompt is copied. Swipe the app row to ChatGPT, paste, send. Save the image, then add it here.'}</p>
+    <p class="fine">${ui.hasKey ? 'Created in the app with your OpenAI key.' : 'Without a key: your photo opens in the share sheet and the prompt is copied. Pick ChatGPT, paste, send. Hold the image it makes, choose Copy, come back and tap Paste. Add your OpenAI key in More and none of this is needed.'}</p>
     <details class="prompt"><summary>Show the prompt</summary><pre>${esc(M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', Math.min(photos.length, 3)))}</pre><button class="btn small" data-act="copyPrompt">Copy prompt</button></details>`;
 }
 function sheetPaste() {
@@ -614,34 +715,42 @@ const A = {
     toast('Checking the key with OpenAI');
     const r = await M.testKey(v);
     if (r === 'rejected') { toast('OpenAI did not accept that key. Check it and paste again.', 5000); return; }
-    await S.secretSet('openai', v); ui.hasKey = true; render();
-    toast(r === 'ok' ? 'Key works. Saved on this phone.' : 'Saved. It will be checked when you are online.', 4000);
+    await S.secretSet('openai', v); ui.hasKey = true; auto.failed.clear(); render();
+    toast(r === 'ok' ? 'Key works. Every fit now arrives as your ChatGPT mockup.' : 'Saved. It will be checked when you are online.', 5000);
   },
   clearKey: async () => { await S.secretSet('openai', null); ui.hasKey = false; render(); toast('Key removed.'); },
   mockup: () => { if (current().o) openSheet({ type: 'mockup' }); },
   copyPrompt: async () => { const c = current(); const ok = await M.copyText(M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', Math.min((st().modelPhotos || []).length, 3))); toast(ok ? 'Prompt copied.' : 'Could not copy.'); },
   makeMockup: async () => {
     const c = current(); if (!c.o) return;
-    const key = await S.secretGet('openai'); if (!key) { toast('Add your OpenAI key in More.'); return; }
-    const photos = (st().modelPhotos || []).slice(0, 3);
-    ui.abort = new AbortController(); ui.busy = 'Sending your photo and the fit to ChatGPT'; renderSheet();
+    if (!ui.hasKey) { toast('Add your OpenAI key in More.'); return; }
+    if (auto.busy) { toast('One mockup is already being made.'); return; }
+    ui.abort = new AbortController(); ui.busy = 'Sending your photo and the fit to ChatGPT'; ui.busySig = mockKey(c.o); renderSheet();
     try {
-      const imgs = [];
-      for (const id of photos) { const b = await S.blobGet(id); if (b) imgs.push(b); }
-      for (const id of [c.o.suit || (c.o.jacket !== 'none' ? c.o.jacket : null), c.o.top, c.o.suit ? null : c.o.bottom, c.o.shoes].filter(Boolean)) {
-        const it = item(id); if (it && it.photo && imgs.length < 8) { const b = await S.blobGet(it.photo); if (b) imgs.push(b); }
-      }
-      const prompt = M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', photos.length);
-      const out = await M.generate({ key, model: st().settings.model, quality: st().settings.quality, prompt, images: imgs, signal: ui.abort.signal, onModel: () => { ui.busy = 'ChatGPT is dressing you'; renderSheet(); } });
-      await saveMock(c.o, out.blob, out.model);
-      ui.busy = null; render(); openSheet({ type: 'mockup' });
+      await createMockup(c.o, { signal: ui.abort.signal, onStage: () => { ui.busy = 'ChatGPT is dressing you'; renderSheet(); } });
+      ui.busy = null; auto.failed.delete(mockKey(c.o)); render(); openSheet({ type: 'mockup' });
     } catch (e) {
       ui.busy = null;
       const msg = e && e.name === 'AbortError' ? 'Cancelled.' : (e && e.message) || 'That did not work. Try again.';
       render(); openSheet({ type: 'mockup', error: msg });
     }
   },
-  cancelMockup: () => { if (ui.abort) ui.abort.abort(); ui.busy = null; renderSheet(); },
+  cancelMockup: () => { if (ui.abort) ui.abort.abort(); if (auto.ctl) auto.ctl.abort(); ui.busy = null; renderSheet(); },
+  retryAuto: () => { const c = current(); if (!c.o) return null; const sig = mockKey(c.o); auto.failed.delete(sig); return runAuto(sig, true); },
+  setupKey: () => { ui.tab = 'more'; closeSheet(); render(); const el = $('#keyCard'); if (el) el.scrollIntoView({ block: 'start' }); },
+  pasteMock: async () => {
+    const c = current(); if (!c.o) return;
+    try {
+      for (const it of await navigator.clipboard.read()) {
+        const type = it.types.find((t) => t.startsWith('image/'));
+        if (!type) continue;
+        const b = await M.downscale(await it.getType(type), 1536, 0.92);
+        await saveMock(c.o, b, 'ChatGPT app'); auto.failed.delete(mockKey(c.o));
+        render(); openSheet({ type: 'mockup' }); toast('Mockup added.'); return;
+      }
+      toast('No image is copied yet. In ChatGPT, hold the image and choose Copy.', 5000);
+    } catch (e) { toast('The image could not be pasted. Use Add the finished image.', 5000); }
+  },
   handOff: async () => {
     const c = current(); if (!c.o) return;
     const photos = st().modelPhotos || [];
@@ -651,7 +760,7 @@ const A = {
     if (r.shared) toast('Prompt copied. In ChatGPT, paste and send.', 5000);
     else if (!r.cancelled) toast(r.copied ? 'Prompt copied. Open ChatGPT, attach your photo, paste, send.' : 'Copy the prompt below, then open ChatGPT.', 6000);
   },
-  attachMock: async () => { const c = current(); const [f] = await pickFile('image/*'); if (!f || !c.o) return; const b = await M.downscale(f, 1536, 0.92); await saveMock(c.o, b, 'ChatGPT app'); render(); openSheet({ type: 'mockup' }); toast('Mockup added.'); },
+  attachMock: async () => { const c = current(); const [f] = await pickFile('image/*'); if (!f || !c.o) return; const b = await M.downscale(f, 1536, 0.92); await saveMock(c.o, b, 'ChatGPT app'); auto.failed.delete(mockKey(c.o)); render(); openSheet({ type: 'mockup' }); toast('Mockup added.'); },
   delMock: async () => { const c = current(); const mk = mockFor(c.o); if (!mk) return; await S.blobDel(mk.blob); delete st().mockups[mockKey(c.o)]; S.save(); render(); openSheet({ type: 'mockup' }); },
   shareMock: async () => {
     const mk = mockFor(current().o); if (!mk) return; const b = await S.blobGet(mk.blob);
@@ -715,6 +824,7 @@ const IN = {
     return answer(a.text, Object.assign({ date: el.value, fixDate: true, label: a.label }, a.pinned ? { occ: ui.occ, forceOcc: true, also: a.also } : {}));
   },
   quality: (el) => { st().settings.quality = el.value; S.save(); },
+  auto: (el) => { st().settings.auto = el.checked; S.save(); },
   model: (el) => { st().settings.model = el.value; S.save(); },
   scene: (el) => { st().settings.setting = el.value; S.save(); renderSheet(); hydrateImages($('#sheet')); },
   itemNotes: (el) => { const i = item(el.dataset.id); if (i) { i.notes = el.value; S.save(); } },
