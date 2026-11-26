@@ -22,7 +22,8 @@ function pieceLine(r) {
   let d = it.name;
   if (c && !d.toLowerCase().includes(c.split(' ').pop())) d += ` (${c})`;
   if (it.pattern && it.pattern !== 'solid' && !d.toLowerCase().includes(it.pattern)) d += `, ${it.pattern} pattern`;
-  if (r.slot === 'top') d += r.note === 'untucked' ? ', worn untucked with the hem ending above mid fly' : ', fully tucked in';
+  if (r.slot === 'top') d += r.note === 'untucked' ? ', worn untucked over the trousers so the hem covers the waistband and ends above mid fly' : ', fully tucked in';
+  if (r.slot === 'glasses') d += ', clear lenses, not sunglasses';
   if (r.slot === 'jacket' && r.note && r.note.includes('separate')) d += ' (the jacket only)';
   if (r.slot === 'hat') d += ', worn level';
   if (r.slot === 'coat') d += ', worn open over the outfit';

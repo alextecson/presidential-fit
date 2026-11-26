@@ -5,7 +5,7 @@ import * as M from './mockup.js';
 import { figureSvg } from './figure.js';
 import { loadForecast, weatherFor, today } from './weather.js';
 
-const VERSION = '1.0.2';
+const VERSION = '1.0.3';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ui = {
