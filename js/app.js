@@ -6,7 +6,7 @@ import { figureSvg } from './figure.js';
 import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
 import { parseAsk, windowFor } from './ask.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -267,6 +267,14 @@ function rowHtml(r, logged) {
   return `<button class="row" ${logged ? 'disabled' : `data-act="swap" data-slot="${r.slot}"`}>
     ${swatch(r.item)}<span class="rt"><span class="rl">${esc(lab)}${locked ? ' · locked' : ''}</span><span class="rn">${name}${note}</span></span>${logged ? '' : '<span class="chev" aria-hidden="true"></span>'}</button>`;
 }
+// One line at the top of the fit: the hours and weather it was checked against, and how the checks came out.
+function verifiedLine(checks) {
+  const when = checks.find((c) => c.k === 'When'), wx = checks.find((c) => c.k === 'Weather');
+  if (!wx || !wx.short) return '';
+  const open = checks.filter((c) => c.level === 'bad' || c.level === 'note').length;
+  const clear = checks.filter((c) => c.level === 'ok').length;
+  return `<button class="verified${open ? ' open' : ''}" data-act="toChecks"><i aria-hidden="true"></i><span>${esc([when && when.short, wx.short].filter(Boolean).join(' · '))}<b>${open ? `${open} of ${open + clear} checks to look at` : `All ${clear} checks clear`}</b></span></button>`;
+}
 // Every factor that was checked for this fit, problems first.
 function checksHtml(checks) {
   if (!checks.length) return '';
@@ -298,6 +306,7 @@ function viewFit() {
     const count = !c.logged && ui.results.length > 1 ? `<span class="count">${ui.idx + 1} of ${ui.results.length}</span>` : '';
     body = `<div class="card fit">
       <div class="fit-head"><div><div class="eyebrow">${esc(status)} · ${esc(occ.long)}</div><h2>${esc(E.fmtDate(ui.date, { weekday: 'long', month: 'long', day: 'numeric' }))}</h2></div>${count}</div>
+      ${verifiedLine(c.checks)}
       ${c.logged && c.entry.status === 'planned' && !past ? '<p class="fine">You locked this in earlier. It was checked again just now.</p>' : ''}
       ${!c.logged && ui.relaxed ? `<p class="error">${esc(ui.relaxed)}</p>` : ''}
       <div class="look${mk ? ' has-photo' : ''}">
@@ -513,6 +522,7 @@ const A = {
     return answer(a.text ? a.text + '. ' + v : v, { date: probe.dateSaid ? probe.date : ui.date, fixDate: true, occ: ui.occ, forceOcc: true, also: a.also, editing: true, label: a.label });
   },
   pickOcc: () => openSheet({ type: 'occ' }),
+  toChecks: () => { const el = $('.checks'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
   setOcc: (d) => {
     const a = ui.ask; if (!a || !E.OCCASIONS[d.occ]) return null;
     a.occ = d.occ; a.occSaid = true; a.pinned = true; a.also = (a.also || []).filter((k) => k !== d.occ); a.notes = (a.notes || []).filter((n) => n.k === 'missing');

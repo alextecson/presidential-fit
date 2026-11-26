@@ -15,6 +15,8 @@
 :root[data-metal="silver"] { --accent: var(--steel); }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 var(--sans); -webkit-text-size-adjust: 100%; overscroll-behavior-y: none; }
+body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+input, textarea, .prompt pre { -webkit-user-select: text; user-select: text; }
 body.sheet-open { overflow: hidden; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -70,6 +72,15 @@ main { flex: 1; display: flex; flex-direction: column; gap: 14px; outline: 0;
 .refine input { flex: 1; min-width: 0; padding: 9px 12px; }
 .refine .btn { flex: 0 0 auto; min-height: 42px; }
 
+.verified { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; align-items: center; width: 100%; text-align: left; border: 0; border-radius: 12px; padding: 10px 12px; background: color-mix(in srgb, var(--ok) 9%, var(--soft)); font-size: .84rem; line-height: 1.35; }
+.verified span { color: var(--mute); }
+.verified b { display: block; color: var(--ink); font-weight: 600; }
+.verified i { width: 18px; height: 18px; border-radius: 50%; background: color-mix(in srgb, var(--ok) 20%, transparent); position: relative; }
+.verified i::after { content: ""; position: absolute; left: 5px; top: 5.5px; width: 7px; height: 4px; border-left: 1.8px solid var(--ok); border-bottom: 1.8px solid var(--ok); transform: rotate(-45deg); }
+.verified.open { background: color-mix(in srgb, var(--warn) 10%, var(--soft)); }
+.verified.open i { background: color-mix(in srgb, var(--warn) 22%, transparent); }
+.verified.open i::after { left: 8px; top: 4px; width: 0; height: 7px; border: 0; border-left: 2px solid var(--warn); transform: none; box-shadow: 0 9.5px 0 -0.2px var(--warn); }
+.checks { scroll-margin-top: calc(env(safe-area-inset-top, 0px) + 64px); }
 .checks h3 { display: flex; gap: 8px; align-items: baseline; margin-bottom: 8px; }
 .checks h3 span { color: var(--ok); letter-spacing: .04em; }
 .checks ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }

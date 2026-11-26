@@ -471,7 +471,7 @@ export function audit(ctx, o) {
   const socks = o.socks ? get(o.socks) : null, glasses = o.glasses ? get(o.glasses) : null;
   const coat = o.coat ? get(o.coat) : null, hat = o.hat ? get(o.hat) : null;
   const out = [];
-  const add = (k, level, t) => { out.push({ k, level, t }); };
+  const add = (k, level, t, short) => { out.push(short ? { k, level, t, short } : { k, level, t }); };
   if (!top || !bottom || !shoes || !watch) { add('Closet', 'bad', 'A piece of this fit is no longer in the closet.'); return out; }
   const nm = (it) => it.short || it.name;
   const pieces = [hat, coat, jacket, top, suit ? null : bottom, belt, shoes, socks, watch, glasses].filter(Boolean);
@@ -479,7 +479,7 @@ export function audit(ctx, o) {
   const win = ctx.win || null;
 
   // when
-  add('When', 'ok', fmtDate(date, { weekday: 'long', month: 'long', day: 'numeric' }) + (win ? `, ${hourLabel(win.from)} to ${hourLabel(win.to)}.` : '.'));
+  add('When', 'ok', fmtDate(date, { weekday: 'long', month: 'long', day: 'numeric' }) + (win ? `, ${hourLabel(win.from)} to ${hourLabel(win.to)}.` : '.'), win ? `${hourLabel(win.from)} to ${hourLabel(win.to)}` : '');
 
   // weather in the hours it is worn
   const w = ctx.weather || {};
@@ -499,8 +499,9 @@ export function audit(ctx, o) {
     if (coat && lo >= 62) issues.push(`It stays above ${lo}°, so the coat is optional.`);
     if (rain >= 50 && shoes.suede) issues.push(`Rain chance ${rain}%. Suede shoes will not like it.`);
     if (hat && wind >= 20) issues.push(`Wind near ${wind} mph. Hold on to the hat.`);
-    if (issues.length) add('Weather', 'note', t + ' ' + issues.join(' '));
-    else add('Weather', 'ok', t + (rain >= 50 ? ' No suede today, and none here.' : coat ? ` The ${nm(coat)} handles outside.` : jacket && lo <= 60 ? ' The jacket covers it.' : ''));
+    const brief = `${hi === lo ? `${hi}°` : `${lo}° to ${hi}°`}, rain ${rain}%` + (w.estimate ? ', seasonal average' : '');
+    if (issues.length) add('Weather', 'note', t + ' ' + issues.join(' '), brief);
+    else add('Weather', 'ok', t + (rain >= 50 ? ' No suede today, and none here.' : coat ? ` The ${nm(coat)} handles outside.` : jacket && lo <= 60 ? ' The jacket covers it.' : ''), brief);
   }
 
   // only what is owned and in rotation
@@ -595,7 +596,7 @@ export function audit(ctx, o) {
     else add('Socks', 'ok', jacket ? 'Mid calf socks with tailoring.' : 'Mid calf socks.');
   }
 
-  if (hat) add('Hat', 'note', `${hat.name}: outdoors only. Off when you walk in, off while you lecture, off in the lounge.`);
+  if (hat) add('Hat', 'you', `${hat.name}: outdoors only. Off when you walk in, off while you lecture, off in the lounge.`);
   if (occ.teach || occ.jacket !== 'optional') add('Yours to check', 'you', 'Pressed, lint free, shoes conditioned, nothing faded.');
   return out;
 }
