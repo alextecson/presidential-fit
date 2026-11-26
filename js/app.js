@@ -5,7 +5,7 @@ import * as M from './mockup.js';
 import { figureSvg } from './figure.js';
 import { loadForecast, weatherFor, today } from './weather.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ui = {
@@ -430,7 +430,14 @@ const A = {
     S.save(); S.persist(); const wasMock = ui.sheet && ui.sheet.type === 'mockup'; render(); if (wasMock) openSheet({ type: 'mockup' }); toast('Photo added.');
   },
   delPhoto: async (d) => { st().modelPhotos = (st().modelPhotos || []).filter((x) => x !== d.id); await S.blobDel(d.id); S.save(); render(); },
-  saveKey: async () => { const v = ($('#keyInput').value || '').trim(); if (!v) { toast('Paste the key first.'); return; } await S.secretSet('openai', v); ui.hasKey = true; render(); toast('Key saved on this phone.'); },
+  saveKey: async () => {
+    const v = ($('#keyInput').value || '').trim(); if (!v) { toast('Paste the key first.'); return; }
+    toast('Checking the key with OpenAI');
+    const r = await M.testKey(v);
+    if (r === 'rejected') { toast('OpenAI did not accept that key. Check it and paste again.', 5000); return; }
+    await S.secretSet('openai', v); ui.hasKey = true; render();
+    toast(r === 'ok' ? 'Key works. Saved on this phone.' : 'Saved. It will be checked when you are online.', 4000);
+  },
   clearKey: async () => { await S.secretSet('openai', null); ui.hasKey = false; render(); toast('Key removed.'); },
   mockup: () => { if (current().o) openSheet({ type: 'mockup' }); },
   copyPrompt: async () => { const c = current(); const ok = await M.copyText(M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', Math.min((st().modelPhotos || []).length, 3))); toast(ok ? 'Prompt copied.' : 'Could not copy.'); },

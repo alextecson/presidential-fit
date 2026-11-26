@@ -1,6 +1,6 @@
 // Presidential Fit: offline shell. One release is cached as a set, so files never mix versions.
 // Calls to OpenAI and the weather service always go to the network.
-const RELEASE = '1.0.0';
+const RELEASE = '1.0.1';
 const CACHE = 'pf-shell-' + RELEASE;
 const SHELL = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'sample-closet.json',
   'js/app.js', 'js/store.js', 'js/engine.js', 'js/mockup.js', 'js/figure.js', 'js/weather.js',

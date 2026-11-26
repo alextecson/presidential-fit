@@ -79,7 +79,13 @@ async function callOnce({ key, model, quality, prompt, images, signal }) {
   fd.append('output_format', 'jpeg');
   fd.append('output_compression', '92');
   images.forEach((b, i) => fd.append('image[]', b, `ref${i + 1}.jpg`));
-  const res = await fetch('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: fd, signal });
+  let res;
+  try { res = await fetch('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: fd, signal }); }
+  catch (e) {
+    if (e && e.name === 'AbortError') throw e;
+    // OpenAI rejects a bad key without the headers a browser needs, so it looks like a dropped connection.
+    throw new MockupError(navigator.onLine === false ? 'You are offline. Mockups need a connection.' : 'ChatGPT did not accept the request. The API key is most likely wrong or inactive. Check it in More, ChatGPT mockups.', 'network');
+  }
   let j = null;
   try { j = await res.json(); } catch (e) { /* not json */ }
   if (res.ok && j && j.data && j.data[0] && j.data[0].b64_json) return b64ToBlob(j.data[0].b64_json, 'image/jpeg');
@@ -129,4 +135,10 @@ export async function handOff(prompt, photoBlob) {
     }
   }
   return { copied, shared: false };
+}
+
+// A quick check that a key is live. A rejected key looks like a failed connection in a browser.
+export async function testKey(key) {
+  try { const r = await fetch('https://api.openai.com/v1/models', { headers: { Authorization: 'Bearer ' + key } }); return r.ok ? 'ok' : 'rejected'; }
+  catch (e) { return navigator.onLine === false ? 'offline' : 'rejected'; }
 }
