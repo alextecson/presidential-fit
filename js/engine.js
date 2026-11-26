@@ -189,6 +189,9 @@ export function solve(ctx, opts = {}) {
   const pinkYesterday = (ctx.wears || []).some((w) => Math.abs(daysBetween(w.date, ctx.date)) === 1 && (w.items || []).some((id) => { const t = get(id); return t && t.cat === 'top' && t.color === 'pink'; }));
   const denimLastFriday = friday && (ctx.wears || []).some((w) => w.group === occ.group && (occ.casualDays || []).includes(dow(w.date)) && daysBetween(w.date, ctx.date) > 0 && daysBetween(w.date, ctx.date) <= 8 && (w.items || []).some((id) => isDenim(get(id))));
   const themed = (it) => !!it && !!mods.theme && (THEMES[mods.theme] || [mods.theme]).includes(it.color);
+  // Pieces the wearer says he already wore: they are excluded by the caller, and the new fit also stays out of their colours.
+  const worn = (mods.unlike || []).map(get).filter(Boolean);
+  const echoes = (it, slot) => !!it && worn.some((u) => (u.cat === 'suit' ? 'jacket' : u.cat) === slot && familyOf(u) === familyOf(it));
 
   for (const watch of watches) {
     if (locks.watch && locks.watch !== watch.id) continue;
@@ -313,6 +316,12 @@ export function solve(ctx, opts = {}) {
     if (shoes.leather === 'black') { score += ['black', 'charcoal', 'grey', 'navy', 'light-grey'].includes(bottom.color) ? 1 : 0; if (WARM_BOTTOMS.includes(bottom.color)) score -= 3; }
     else if (brownShoes) { if (bottom.color === 'black') score -= 3.5; else score += 1; }
     if (night) { if (bC.d <= 2) score -= 1.2; else if (bC.d >= 6) score += 0.3; }   // evening reads darker
+    if (worn.length) {                                                       // a change has to look like a change
+      if (echoes(jacket, 'jacket')) score -= 3.5;
+      if (echoes(top, 'top')) score -= 3.5;
+      if (!isSuit && echoes(bottom, 'bottom')) score -= 2;
+      if (echoes(shoes, 'shoes')) score -= 1;
+    }
     if (mods.theme) {
       score += (themed(top) ? 2.4 : -1.2) + (themed(bottom) ? 2.6 : -2);
       if (jacket) score += themed(jacket) ? 1.6 : -0.8;
@@ -597,10 +606,14 @@ export function audit(ctx, o) {
   }
 
   if (hat) add('Hat', 'you', `${hat.name}: outdoors only. Off when you walk in, off while you lecture, off in the lounge.`);
+  if (hat && metal && (colorOf(hat).tone === 'warm') !== (metal === 'gold') && colorOf(hat).tone !== 'neutral') add('Hat', 'note', `The ${nm(hat)} is a ${colorOf(hat).tone} piece on a ${metal === 'gold' ? 'warm, gold' : 'cool, silver'} fit.`);
   if (occ.teach || occ.jacket !== 'optional') add('Yours to check', 'you', 'Pressed, lint free, shoes conditioned, nothing faded.');
   return out;
 }
-const sayOf = (k) => (OCCASIONS[k] && OCCASIONS[k].say) || 'the day';
+export const sayOf = (k) => (OCCASIONS[k] && OCCASIONS[k].say) || 'the day';
+const FAMILY = { tan: 'tan', camel: 'tan', khaki: 'tan', stone: 'tan', cognac: 'tan', taupe: 'tan', cream: 'cream', 'off-white': 'cream', white: 'cream', navy: 'blue', indigo: 'blue', blue: 'blue', 'light-blue': 'blue', slate: 'blue',
+  charcoal: 'grey', grey: 'grey', 'light-grey': 'grey', olive: 'green', green: 'green', sage: 'green', brown: 'brown', 'dark-brown': 'brown', burgundy: 'red', red: 'red', lavender: 'purple', purple: 'purple' };
+const familyOf = (it) => FAMILY[it.color] || it.color;
 // Shirts that are the whole look: worn untucked and never under a jacket.
 const solo = (t) => !!t && (!!t.solo || /\bbarong\b/i.test(t.name || ''));
 export function hourLabel(h) {

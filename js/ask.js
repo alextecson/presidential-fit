@@ -32,6 +32,7 @@ const GENERIC = set('special occasion happy hour night evening morning visit roo
 const WINDOWS = { teach: [7, 16], work: [8, 18], dinner: [18, 22], lounge: [17, 23], bar: [17, 24], event: [18, 24], dressy: [15, 23], casual: [9, 19] };
 const PARTS = { morning: [6, 12], midday: [11, 14], afternoon: [12, 17], evening: [17, 22], night: [18, 24], allday: [7, 22] };
 const EVENING_KINDS = new Set(['dinner', 'lounge', 'bar', 'event', 'dressy']);
+const DAYPART = new Set(['morning', 'noon', 'midday', 'afternoon', 'evening', 'night', 'tonight', 'tonite', 'lunchtime', 'home', 'work', 'school']);
 
 // ---------- closet vocabulary ----------
 const STOP = set(`a an the my his her our your this that these those some any of for to in on at by from with without and or nor but then so as is are was were be been am i im me we you it its
@@ -318,8 +319,10 @@ export function windowFor(ask, date, now = new Date()) {
 // env: { today, date (used when no day is named), fixDate (ignore days named in the text), items, profile }
 export function parseAsk(text, env) {
   const today = env.today, profile = env.profile || {}, groups = profile.groups || [];
-  const out = { text: String(text || '').trim(), date: env.date || today, dateSaid: false, occ: null, occSaid: false, also: [], negKinds: [], mods: {}, locks: {}, allow: {}, exclude: [], notes: [], parts: [], clock: null, clockAp: '', lunch: false };
+  const out = { text: String(text || '').trim(), date: env.date || today, dateSaid: false, occ: null, occSaid: false, also: [], negKinds: [], mods: {}, locks: {}, allow: {}, exclude: [], notes: [], parts: [], clock: null, clockAp: '', lunch: false, venue: '', wore: false };
   const full = canon(clean(out.text));
+  // "I wore this last week", "same outfit as last time": the fit he is looking at has been worn and should change
+  out.wore = /\b(?:wore|worn)\b[^|]*\b(?:this|that|it|same)\b|\bsame (?:outfit|fit|look|thing|one)\b/.test(full);
   let s = full.replace(/\bshow me\b/g, ' ').replace(/\s+/g, ' ').trim();
 
   const d = readDate(s, today);
@@ -431,6 +434,21 @@ export function parseAsk(text, env) {
   if (out.lunch) shift -= 0.5;
   if (shift) out.mods.shift = Math.max(-1.5, Math.min(1.5, shift));
 
-  scanPieces(s, env.items || [], out);
+  // A place named after "at" ("dinner at Marios"): kept for the reply, and kept out of the piece scan.
+  const toks = s.split(' ');
+  const plain = (w) => /^[a-z][a-z0-9]*$/.test(w) && !STOP.has(w) && !FILL.has(w) && !NEG.has(w) && !DESC.has(w) && !(w in NOUNS) && !DAYPART.has(w);
+  for (let i = 0; i < toks.length; i++) {
+    if (toks[i] !== 'at') continue;
+    const the = toks[i + 1] === 'the';
+    let j = the ? i + 2 : i + 1;
+    const words = [];
+    while (j < toks.length && words.length < 3 && plain(toks[j])) { words.push(toks[j]); toks[j] = '§'; j++; }
+    if (words.length && !out.venue) {
+      const m2 = new RegExp(words.join('\\W+'), 'i').exec(out.text);
+      const shown = m2 ? m2[0] : words.join(' ');
+      out.venue = (the ? 'the ' : '') + (shown === shown.toLowerCase() ? shown.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : shown);
+    }
+  }
+  scanPieces(toks.join(' '), env.items || [], out);
   return out;
 }

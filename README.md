@@ -3,6 +3,7 @@
 A personal stylist web app for iPhone. It opens on one question, "What is the fit for?", and builds the outfit from the answer, only from your own closet and under your own standing rules.
 
 - Answer in your own words ("dinner tonight, then drinks", "Monday class with the fedora, no jeans") or tap an occasion.
+- It answers back in plain words: what it took your message to mean, what it did about each part, and what changed in the fit. Say "I wore this last week" and the pieces on screen, and their colours, stay out of the next fit.
 - Every fit comes with a check list: the hours it is worn, the live hour by hour weather for those hours, metals, belt and shoes, tuck, dress level, and what each audience has already seen.
 - Works offline once added to the Home Screen. The weather check needs a connection and says so when it has none.
 - Your closet, log, photos and any API key stay on the device. Nothing personal is stored in this repository.

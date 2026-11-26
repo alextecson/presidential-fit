@@ -67,6 +67,7 @@ main { flex: 1; display: flex; flex-direction: column; gap: 14px; outline: 0;
 .pill.plain { background: none; border-style: dashed; color: var(--mute); font-weight: 500; }
 .pill.plain::after { display: none; }
 .pills > .link { margin-left: auto; padding: 4px 0; white-space: nowrap; }
+.reply { margin: 0; padding: 10px 12px; border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0; background: color-mix(in srgb, var(--accent) 7%, var(--soft)); font-size: .9rem; line-height: 1.45; }
 .notes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: .84rem; color: var(--mute); }
 .refine { display: flex; gap: 8px; align-items: center; }
 .refine input { flex: 1; min-width: 0; padding: 9px 12px; }

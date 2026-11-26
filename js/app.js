@@ -7,7 +7,7 @@ import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
 import { parseAsk, windowFor } from './ask.js';
 import * as L from './link.js';
 
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -44,7 +44,7 @@ const blankAsk = (date, occ, extra) => Object.assign({ text: '', date, dateSaid:
 // What the answer asks of the engine, with any piece swapped by hand on top.
 function brief() {
   const a = ui.ask || {};
-  return { locks: Object.assign({}, a.locks || {}, ui.locks), allow: a.allow || {}, exclude: a.exclude || [], mods: Object.assign({}, a.mods || {}, { also: a.also || [] }) };
+  return { locks: Object.assign({}, a.locks || {}, ui.locks), allow: a.allow || {}, exclude: a.exclude || [], mods: Object.assign({}, a.mods || {}, { also: a.also || [], unlike: a.worn || [] }) };
 }
 // Does a fit already in the log satisfy what was just asked for?
 function fitsAsk(o, a) {
@@ -107,13 +107,90 @@ function reaudit() {
   for (const r of ui.results) { r.checks = E.audit(c, r.o); r.flags = r.checks.filter((x) => x.level === 'bad' || x.level === 'note').map((x) => x.t); }
 }
 // Never hand over a fit on an old forecast: fetch a fresh one first when a connection is there.
-async function present(prefer) {
+async function present(prefer, then) {
   if (ui.date >= today() && (!ui.forecast || !ui.forecast.at || Date.now() - ui.forecast.at > FRESH_MS)) {
     ui.loading = 'Checking the weather'; render();
     ui.forecast = await loadForecast(st().profile, true);
   }
-  ui.loading = ''; recompute(prefer); render();
+  ui.loading = ''; recompute(prefer);
+  if (then) then();
+  render();
 }
+// The stylist's answer to what was typed: what it took the words to mean, what it did about each part, and what changed.
+const mainIds = (o) => (o ? [o.suit || (o.jacket !== 'none' ? o.jacket : null), o.top, o.suit ? null : o.bottom, o.shoes].filter(Boolean) : []);
+function respond(before, latest) {
+  // before: the fit that was on screen. latest: the parse of only the newest message, when this is a follow up.
+  const p = ui.ask; if (!p) return;
+  const c = current(), after = c.o;
+  const nm = (id) => { const it = item(id); return it ? (it.short || it.name) : ''; };
+  const up = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t);
+  const few = (ids, n = 4) => { const names = ids.map(nm).filter(Boolean); return E.listAnd(names.slice(0, n).concat(names.length > n ? [`${names.length - n} more`] : [])); };
+  const SL = { jacket: 'jacket', top: 'top', bottom: 'trousers', shoes: 'shoes', belt: 'belt', watch: 'watch', glasses: 'glasses', hat: 'hat', coat: 'coat', socks: 'socks' };
+  const occ = E.OCCASIONS[ui.occ] || E.OCCASIONS.casual;
+  const w = win(), t = today(), late = !!w && w.from >= 17;
+  const when = ui.date === t ? (late ? 'tonight' : 'today') : ui.date === E.addDays(t, 1) ? (late ? 'tomorrow night' : 'tomorrow') : 'on ' + E.fmtDate(ui.date, { weekday: 'long', month: 'short', day: 'numeric' });
+  const what = (occ.teach ? 'class with the ' + groupLabel(occ.group) : ui.occ === 'dressy' ? 'a special occasion' : E.sayOf(ui.occ)) + (p.venue ? ' at ' + p.venue : '');
+  const also = (p.also || []).filter((k) => E.OCCASIONS[k] && k !== ui.occ).map(E.sayOf);
+  const plan = `${what} ${when}${w ? `, ${E.hourLabel(w.from)} to ${E.hourLabel(w.to)}` : ''}${also.length ? ', then ' + E.listAnd(also) : ''}.`;
+  // what one message asked for, said back
+  const tell = (q, skip = []) => {
+    const out = [], m = q.mods || {};
+    const named = Object.entries(q.locks || {}).filter(([k, v]) => v && v !== 'none' && k !== 'tuck' && !skip.includes(v)).map(([, v]) => nm(v)).filter(Boolean);
+    if (named.length) out.push(`In, as you asked: ${E.listAnd(named)}.`);
+    for (const [k, v] of Object.entries(q.locks || {})) if (v === 'none' && !(k === 'jacket' && m.lab)) out.push(`No ${SL[k] || k}.`);
+    if (q.locks && q.locks.tuck) out.push(q.locks.tuck === 'tucked' ? 'Shirt tucked.' : 'Shirt untucked.');
+    const gone = new Set((p.exclude || []).concat(p.avoid || []));
+    for (const [k, ids] of Object.entries(q.allow || {})) {
+      if (m.wantSuit && k === 'jacket') continue;
+      const all = st().items.filter((i) => i.cat === k && i.status !== 'retired' && !gone.has(i.id)).length;
+      const got = after ? (k === 'jacket' ? (after.suit || after.jacket) : after[k]) : null;
+      if (ids.filter((id) => !gone.has(id)).length >= all) { if (['jacket', 'hat', 'coat', 'belt'].includes(k) && !(before && latest)) out.push(`With a ${SL[k]}, as you asked.`); }
+      else if (got && ids.includes(got)) out.push(`${up(SL[k] || k)} from the ones you named: ${nm(got)}.`);
+    }
+    if (m.wantSuit) out.push('A full suit, as you asked.');
+    if (m.noSuit) out.push('No suit.');
+    if (m.noDenim) out.push('No jeans.');
+    if (m.shift <= -1) out.push('Kept more relaxed.'); else if (m.shift >= 1) out.push('Stepped up a level.');
+    if (m.theme) out.push(`All ${m.theme}.`);
+    if (m.golf) out.push('Golf course feel.');
+    if (m.lab) out.push('No jacket, since the lab coat goes over it.');
+    const left = (q.exclude || []).filter((id) => !(p.avoid || []).includes(id));
+    if (left.length && !m.noDenim) out.push(`Left out: ${few(left)}.`);
+    return out;
+  };
+  // what changed against the fit that was on screen
+  let diff = '', fresh = [];
+  if (before && after && !c.logged) {
+    const slots = [['hat', (o) => o.hat || null], ['coat', (o) => o.coat || null], ['jacket', (o) => o.suit || (o.jacket !== 'none' ? o.jacket : null)], ['top', (o) => o.top], ['bottom', (o) => (o.suit ? null : o.bottom)], ['shoes', (o) => o.shoes]];
+    const ch = slots.map(([k, f]) => ({ k, was: f(before), now: f(after) })).filter((x) => x.was !== x.now);
+    fresh = ch.map((x) => x.now).filter(Boolean);
+    if (!ch.length) diff = latest && (latest.notes || []).some((n) => n.k === 'missing') ? 'Nothing changed.' : 'Nothing changed: this fit already meets that.';
+    else if (ch.length === 1) diff = ch[0].now ? `${up(SL[ch[0].k])}: ${nm(ch[0].now)}${ch[0].was ? ' in place of the ' + nm(ch[0].was) : ''}.` : `No ${SL[ch[0].k]} now.`;
+    else diff = `New in this fit: ${E.listAnd(ch.filter((x) => x.now).map((x) => nm(x.now)))}.`;
+  }
+  const out = [];
+  if (latest) {                                                   // a follow up: answer the new message first, then say what still holds
+    for (const n of latest.notes || []) if (n.k === 'missing') out.push(n.t);
+    if (diff) out.push(diff);
+    out.push(...tell(latest, fresh));
+    if (latest.wore && before) out.push('Noted that you already wore that one, so its pieces stay out.');
+    if (ui.relaxed && !c.logged) out.push(ui.relaxed);
+    out.push(`Still ${plan}`);
+    p.reply = out; p.diff = '';
+    return;
+  }
+  if (p.text) out.push(up(plan));
+  for (const n of p.notes || []) if (n.k !== 'avoid') out.push(n.t);
+  out.push(...tell(p));
+  const worn = p.worn || [];
+  const swapped = (p.avoid || []).filter((id) => !worn.includes(id));
+  if (worn.length) out.push(`Already worn, so out: ${few(worn)}. Kept clear of their colours too.`);
+  else if (p.wore) out.push('The log has no fit for that day to compare with, so this is a fresh pick.');
+  if (swapped.length) out.push(`Swapped out at your ask: ${few(swapped)}.`);
+  if (ui.relaxed && !c.logged) out.push(ui.relaxed);
+  p.reply = out; p.diff = diff;
+}
+const dropDiff = () => { if (ui.ask) ui.ask.diff = ''; };
 // The answer to the opening question becomes the brief for the fit.
 async function answer(text, over = {}) {
   const p = parseAsk(text, { today: today(), date: over.date || null, fixDate: !!over.fixDate, items: st().items, profile: st().profile, now: new Date() });
@@ -137,14 +214,23 @@ async function answer(text, over = {}) {
     p.exclude = [...new Set(p.exclude.concat(p.avoid))];
     for (const [k, id] of Object.entries(p.locks)) if (p.avoid.includes(id)) delete p.locks[k];
     for (const k of Object.keys(p.allow)) { p.allow[k] = p.allow[k].filter((id) => !p.avoid.includes(id)); if (!p.allow[k].length) delete p.allow[k]; }
-    const names = p.avoid.map((id) => { const it = item(id); return it ? (it.short || it.name) : null; }).filter(Boolean);
-    if (names.length) p.notes.push({ k: 'avoid', t: `Left out because you asked for a change: ${E.listAnd(names)}.` });
+  }
+  const e = entryFor(p.date, p.occ);
+  const logged = e ? outfitFromEntry(e) : null;
+  const before = over.before || (logged && logged.complete ? logged : null);
+  p.worn = [...new Set(over.worn || [])];
+  if (p.wore && before && !over.worn) {                           // "I wore this last week": what he was shown has to change
+    const named = new Set(Object.values(p.locks).concat(...Object.values(p.allow).filter((ids) => ids.length <= 2)));
+    p.worn = mainIds(before).filter((id) => !named.has(id));
+    p.avoid = [...new Set((p.avoid || []).concat(p.worn))];
+    p.exclude = [...new Set(p.exclude.concat(p.avoid))];
+    for (const k of Object.keys(p.allow)) { p.allow[k] = p.allow[k].filter((id) => !p.avoid.includes(id)); if (!p.allow[k].length) delete p.allow[k]; }
   }
   ui.ask = p; ui.date = p.date; ui.occ = p.occ; ui.locks = {}; ui.idx = 0; ui.askDay = today();
-  const e = entryFor(ui.date, ui.occ);
-  ui.editing = !!e && (!!over.editing || !fitsAsk(outfitFromEntry(e), p));
+  ui.editing = !!e && (!!over.editing || !fitsAsk(logged, p));
   ui.mode = 'fit'; ui.tab = 'fit'; closeSheet();
-  await present(over.prefer || null);
+  if (over.shown) p.shown = over.shown;
+  await present(over.prefer || null, () => respond(before, over.latest || null));
   window.scrollTo(0, 0);
 }
 // Words in the Change box that mean "not what is on screen": the whole fit, or one named piece of it.
@@ -153,16 +239,16 @@ const CHANGE_ONE = /\b(?:change|different|another|other|swap|switch|new|replace|
 const slotOfWord = (w) => (/^(jacket|blazer|suit)/.test(w) ? 'jacket' : /^coat/.test(w) ? 'coat' : /^(shirt|top|polo|sweater|tee)/.test(w) ? 'top' : /^(pants|trousers|jeans|slacks|chinos)/.test(w) ? 'bottom' : /^(shoes|loafers|sneakers)/.test(w) ? 'shoes' : /^belt/.test(w) ? 'belt' : /^watch/.test(w) ? 'watch' : /^hat/.test(w) ? 'hat' : /^glasses/.test(w) ? 'glasses' : 'socks');
 function avoidFrom(text, o, prior) {
   const out = new Set(prior || []);
-  if (!o) return { ids: [...out], one: false };
+  if (!o) return { ids: [...out], one: false, whole: false };
   const t = String(text).toLowerCase().replace(/[\u2018\u2019']/g, '');
   const have = { jacket: o.suit || (o.jacket !== 'none' ? o.jacket : null), top: o.top, bottom: o.suit ? null : o.bottom, shoes: o.shoes, belt: o.belt !== 'none' ? o.belt : null, watch: o.watch, hat: o.hat, coat: o.coat, socks: o.socks, glasses: o.glasses };
   const slots = new Set();
   let m; CHANGE_ONE.lastIndex = 0;
   while ((m = CHANGE_ONE.exec(t))) slots.add(slotOfWord(m[1]));
-  if (!slots.size && CHANGE_ALL.test(t)) ['jacket', 'top', 'bottom', 'shoes'].forEach((k) => slots.add(k));
+  if (!slots.size && (CHANGE_ALL.test(t) || /\b(?:wore|worn)\b[^.,;!?]*\b(?:this|that|it|same)\b|\bsame (?:outfit|fit|look|thing|one)\b/.test(t))) ['jacket', 'top', 'bottom', 'shoes'].forEach((k) => slots.add(k));
   const one = slots.size > 0 && !(slots.size === 4 && CHANGE_ALL.test(t));
   for (const k of slots) if (have[k]) out.add(have[k]);
-  return { ids: [...out], one };                                 // one: a single piece was named, so the rest of the look should hold
+  return { ids: [...out], one, whole: slots.size > 0 && !one };   // one: a single piece was named. whole: the fit as a whole should change
 }
 function openDay(date, occ, extra) {
   ui.ask = blankAsk(date, occ, extra); ui.date = date; ui.occ = occ; ui.locks = {}; ui.idx = 0; ui.editing = !!(extra && extra.editing); ui.askDay = today();
@@ -380,7 +466,7 @@ function viewAsk() {
 function askBar() {
   const a = ui.ask, occ = E.OCCASIONS[ui.occ] || E.OCCASIONS.casual;
   const also = (a.also || []).filter((k) => E.OCCASIONS[k] && k !== ui.occ);
-  const said = a.text ? `<q>${esc(a.text)}</q>` : esc(a.label || '');
+  const said = a.shown || a.text ? `<q>${esc(a.shown || a.text)}</q>` : esc(a.label || '');
   const again = '<button class="link" data-act="askAgain">New question</button>';
   return `<div class="card asked">
     ${said ? `<div class="asked-top"><div class="said">${said}</div>${again}</div>` : ''}
@@ -390,7 +476,7 @@ function askBar() {
       ${also.map((k) => `<span class="pill plain">+ ${esc(E.OCCASIONS[k].long)}</span>`).join('')}
       ${said ? '' : again}
     </div>
-    ${(a.notes || []).length ? `<ul class="notes">${a.notes.map((n) => `<li>${esc(n.t)}</li>`).join('')}</ul>` : ''}
+    ${(a.reply || []).length || a.diff ? `<p class="reply">${esc((a.reply || []).concat(a.diff ? [a.diff] : []).join(' '))}</p>` : ((a.notes || []).length ? `<ul class="notes">${a.notes.map((n) => `<li>${esc(n.t)}</li>`).join('')}</ul>` : '')}
     <div class="refine"><input type="text" id="refineBox" data-enter="refine" enterkeyhint="go" placeholder="Change something" aria-label="Change something about this fit" autocomplete="off"><button class="btn small" data-act="refine">Go</button></div>
   </div>`;
 }
@@ -687,9 +773,11 @@ const A = {
     const now = current().o;
     const av = avoidFrom(v, now, a.avoid);
     const avoid = av.ids.filter((id) => !named.has(id));
-    const prefer = av.one && now ? now : null;
-    if (probe.occSaid) return answer(v, { date: ui.date, editing: true, avoid, prefer });    // a new occasion is a new question, same day unless a day is named
-    return answer(a.text ? a.text + '. ' + v : v, { date: probe.dateSaid ? probe.date : ui.date, fixDate: true, occ: ui.occ, forceOcc: true, also: a.also, editing: true, label: a.label, avoid, prefer });
+    // a follow up holds the rest of the look, unless it asks for a different fit altogether or a different dress level
+    const prefer = now && !av.whole && !probe.wore && !(probe.mods && probe.mods.shift) ? now : null;
+    const worn = (a.worn || []).concat(probe.wore && now ? mainIds(now).filter((id) => !named.has(id)) : []);
+    if (probe.occSaid) return answer(v, { date: ui.date, editing: true, avoid, worn, prefer, before: now });    // a new occasion is a new question, same day unless a day is named
+    return answer(a.text ? a.text + '. ' + v : v, { date: probe.dateSaid ? probe.date : ui.date, fixDate: true, occ: ui.occ, forceOcc: true, also: a.also, editing: true, label: a.label, avoid, worn, prefer, before: now, latest: probe, shown: v });
   },
   pickOcc: () => openSheet({ type: 'occ' }),
   toChecks: () => { const el = $('.checks'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
@@ -697,10 +785,10 @@ const A = {
     const a = ui.ask; if (!a || !E.OCCASIONS[d.occ]) return null;
     a.occ = d.occ; a.occSaid = true; a.pinned = true; a.also = (a.also || []).filter((k) => k !== d.occ); a.notes = (a.notes || []).filter((n) => n.k === 'missing' || n.k === 'avoid');
     ui.occ = d.occ; ui.locks = {}; ui.editing = false; closeSheet();
-    return present();
+    return present(null, () => respond(null));
   },
-  another: () => { if (ui.results.length) { ui.idx = (ui.idx + 1) % ui.results.length; render(); } },
-  clearLocks: () => { ui.locks = {}; recompute(); render(); },
+  another: () => { if (ui.results.length) { ui.idx = (ui.idx + 1) % ui.results.length; dropDiff(); render(); } },
+  clearLocks: () => { ui.locks = {}; recompute(); dropDiff(); render(); },
   swap: (d) => {
     const c = current(); if (!c.o) return;
     const b = brief();
@@ -711,9 +799,9 @@ const A = {
     const prev = current().o;
     ui.locks[d.slot] = d.id;
     if (d.slot === 'jacket') { const it = item(d.id); if (it && it.cat === 'suit') delete ui.locks.bottom; }
-    recompute(prev); closeSheet(); render();
+    recompute(prev); dropDiff(); closeSheet(); render();
   },
-  unlock: (d) => { const prev = current().o; delete ui.locks[d.slot]; recompute(prev); closeSheet(); render(); },
+  unlock: (d) => { const prev = current().o; delete ui.locks[d.slot]; recompute(prev); dropDiff(); closeSheet(); render(); },
   lockIn: () => {
     const c = current(); if (!c.o) return;
     const occ = E.OCCASIONS[ui.occ];
@@ -893,7 +981,7 @@ const IN = {
   askDate: (el) => { if (el.value) { ui.when = el.value; ui.date = el.value; render(); } },
   pillDate: (el) => {
     const a = ui.ask; if (!el.value || !a) return null;
-    return answer(a.text, Object.assign({ date: el.value, fixDate: true, label: a.label, avoid: a.avoid }, a.pinned ? { occ: ui.occ, forceOcc: true, also: a.also } : {}));
+    return answer(a.text, Object.assign({ date: el.value, fixDate: true, label: a.label, avoid: a.avoid, worn: a.worn }, a.pinned ? { occ: ui.occ, forceOcc: true, also: a.also } : {}));
   },
   quality: (el) => { st().settings.quality = el.value; S.save(); },
   auto: (el) => { st().settings.auto = el.checked; S.save(); },
