@@ -3,13 +3,16 @@ import * as S from './store.js';
 import * as E from './engine.js';
 import * as M from './mockup.js';
 import { figureSvg } from './figure.js';
-import { loadForecast, weatherFor, today } from './weather.js';
+import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
+import { parseAsk, windowFor } from './ask.js';
 
-const VERSION = '1.0.3';
+const VERSION = '1.1.0';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
 const ui = {
-  tab: 'fit', date: today(), occ: null, locks: {}, results: [], idx: 0, editing: false,
+  tab: 'fit', mode: 'ask', ask: null, draft: '', when: null, askDay: today(), loading: '', relaxed: '',
+  date: today(), occ: null, locks: {}, results: [], idx: 0, editing: false,
   forecast: null, q: '', logFilter: 'all', sheet: null, busy: null, hasKey: false,
 };
 const st = () => S.state;
@@ -21,20 +24,41 @@ function toast(msg, ms = 2600) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
   clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.hidden = true; }, ms);
 }
+// The hours the fit is worn, from the answer and the clock. Past days have no forecast to check.
+function win() { return ui.mode === 'fit' && ui.ask && ui.occ ? windowFor(Object.assign({}, ui.ask, { occ: ui.occ }), ui.date, new Date()) : null; }
 function ctx() {
-  return { items: st().items, wears: st().wears, groups: st().profile.groups, cars: st().profile.cars || [], date: ui.date, occ: ui.occ, weather: weatherFor(ui.forecast, ui.date) };
+  const w = win();
+  const past = ui.date < today();
+  return { items: st().items, wears: st().wears, groups: st().profile.groups, cars: st().profile.cars || [], date: ui.date, occ: ui.occ, win: past ? null : w, weather: past ? null : weatherFor(ui.forecast, ui.date, w) };
 }
-function defaultOcc(date) {
-  const logged = st().wears.filter((w) => w.date === date);
-  if (logged.length) return logged[logged.length - 1].occ;
-  const d = E.dow(date);
-  const g = st().profile.groups.find((x) => (x.days || []).includes(d));
-  if (g) return 'teach_' + g.id;
-  return ui.lastOcc && E.OCCASIONS[ui.lastOcc] && !E.OCCASIONS[ui.lastOcc].teach ? ui.lastOcc : 'casual';
+// With no occasion named: what the log already has for that day, else a class day, else a casual day.
+function defaultOcc(date, neg = []) {
+  const logged = st().wears.filter((w) => w.date === date && E.OCCASIONS[w.occ] && !(E.OCCASIONS[w.occ].teach && neg.includes('teach')));
+  if (logged.length) return { occ: logged[logged.length - 1].occ, why: 'log' };
+  const g = neg.includes('teach') ? null : st().profile.groups.find((x) => (x.days || []).includes(E.dow(date)));
+  if (g) return { occ: 'teach_' + g.id, why: 'class', g };
+  return { occ: 'casual', why: 'none' };
+}
+const blankAsk = (date, occ, extra) => Object.assign({ text: '', date, dateSaid: true, occ, occSaid: true, pinned: true, also: [], negKinds: [], mods: {}, locks: {}, allow: {}, exclude: [], notes: [], parts: [], clock: null, clockAp: '', lunch: false }, extra || {});
+// What the answer asks of the engine, with any piece swapped by hand on top.
+function brief() {
+  const a = ui.ask || {};
+  return { locks: Object.assign({}, a.locks || {}, ui.locks), allow: a.allow || {}, exclude: a.exclude || [], mods: Object.assign({}, a.mods || {}, { also: a.also || [] }) };
+}
+// Does a fit already in the log satisfy what was just asked for?
+function fitsAsk(o, a) {
+  if (!o || !o.complete) return false;
+  const m = a.mods || {};
+  if (m.theme || m.golf || m.wantSuit && !o.suit || m.noSuit && o.suit || m.noDenim && E.isDenim(item(o.bottom))) return false;
+  const have = (slot) => (slot === 'jacket' ? (o.suit || o.jacket || 'none') : slot === 'tuck' ? o.tuck : (o[slot] || 'none'));
+  for (const [k, v] of Object.entries(a.locks || {})) if (have(k) !== v) return false;
+  for (const [k, v] of Object.entries(a.allow || {})) if (!v.includes(have(k))) return false;
+  return !(a.exclude || []).some((id) => E.majorIds(o).includes(id));
 }
 function entryFor(date, occ) { return st().wears.find((w) => w.date === date && w.occ === occ) || null; }
 function outfitFromEntry(w) {
-  const o = { occ: w.occ, date: w.date, suit: null, jacket: 'none', top: null, bottom: null, belt: 'none', shoes: null, socks: null, watch: null, glasses: null, coat: null, hat: null, tuck: w.tuck || null };
+  const o = { occ: w.occ, date: w.date, suit: null, jacket: 'none', top: null, bottom: null, belt: 'none', shoes: null, socks: null, watch: null, glasses: null, coat: null, hat: null, tuck: w.tuck || null,
+    also: w.also || [], shift: w.shift || 0, easy: !!w.easy, lab: !!w.lab || /lab coat/i.test(w.note || '') };
   for (const id of w.items || []) {
     const it = item(id); if (!it) continue;
     if (it.cat === 'suit') { if (!o.suit && !(w.items || []).some((x) => { const b = item(x); return b && b.cat === 'bottom'; })) { o.suit = id; o.jacket = id; o.bottom = id; } else { o.jacket = id; } }
@@ -50,16 +74,71 @@ function outfitFromEntry(w) {
 }
 function current() {
   const e = entryFor(ui.date, ui.occ);
-  if (e && !ui.editing) { const o = outfitFromEntry(e); return { entry: e, o, why: [], flags: [], logged: true }; }
+  if (e && !ui.editing) {
+    const o = outfitFromEntry(e);
+    if (!o.also.length && ui.ask && (ui.ask.also || []).length) o.also = ui.ask.also.filter((k) => k !== o.occ);   // the stops just named count for the check
+    const checks = o.complete ? E.audit(ctx(), o) : [];
+    return { entry: e, o, why: [], checks, flags: checks.filter((c) => c.level === 'bad' || c.level === 'note').map((c) => c.t), logged: true };
+  }
   const r = ui.results[ui.idx] || null;
-  return r ? { entry: e, o: r.o, why: r.why, flags: r.flags, logged: false } : { entry: e, o: null, why: [], flags: [], logged: false };
+  return r ? { entry: e, o: r.o, why: r.why, checks: r.checks || [], flags: r.flags || [], logged: false } : { entry: e, o: null, why: [], checks: [], flags: [], logged: false };
 }
 function recompute(prefer) {
-  if (!st().items.length) { ui.results = []; return; }
-  ui.results = E.solve(ctx(), { locks: ui.locks, prefer: prefer || null, n: 8 });
-  ui.idx = 0;
+  ui.relaxed = '';
+  if (!st().items.length || !ui.occ) { ui.results = []; ui.idx = 0; return; }
+  const c = ctx(), b = brief(), a = ui.ask || {}, m = a.mods || {};
+  let r = E.solve(c, Object.assign({}, b, { prefer: prefer || null, n: 8 }));
+  const asked = Object.keys(a.locks || {}).length || Object.keys(a.allow || {}).length || (a.exclude || []).length || m.wantSuit || m.noSuit || m.noDenim || m.theme;
+  if (!r.length && asked) {
+    // nothing clears the rules with every piece that was named: keep the ones named outright, then ease those too, and say so
+    r = E.solve(c, { locks: b.locks, mods: { also: a.also || [], shift: m.shift, lab: m.lab }, prefer: prefer || null, n: 8 });
+    if (r.length) ui.relaxed = 'Not everything you asked for works together under your rules. This keeps the pieces you named outright.';
+    else {
+      r = E.solve(c, { locks: ui.locks, mods: { also: a.also || [], shift: m.shift }, prefer: prefer || null, n: 8 });
+      if (r.length) ui.relaxed = 'The pieces you named do not clear your rules together, so this fit leaves them out.';
+    }
+  }
+  ui.results = r; ui.idx = 0;
 }
-function setDate(d) { ui.date = d; ui.occ = defaultOcc(d); ui.locks = {}; ui.editing = false; recompute(); render(); }
+// Never hand over a fit on an old forecast: fetch a fresh one first when a connection is there.
+async function present(prefer) {
+  if (ui.date >= today() && (!ui.forecast || !ui.forecast.at || Date.now() - ui.forecast.at > FRESH_MS)) {
+    ui.loading = 'Checking the weather'; render();
+    ui.forecast = await loadForecast(st().profile, true);
+  }
+  ui.loading = ''; recompute(prefer); render();
+}
+// The answer to the opening question becomes the brief for the fit.
+async function answer(text, over = {}) {
+  const p = parseAsk(text, { today: today(), date: over.date || null, fixDate: !!over.fixDate, items: st().items, profile: st().profile, now: new Date() });
+  if (over.occ && (over.forceOcc || !p.occSaid)) {
+    p.occ = over.occ; p.occSaid = true; p.pinned = true;
+    if (over.forceOcc) p.also = (over.also || []).filter((k) => k !== over.occ);
+    p.notes = p.notes.filter((n) => n.k !== 'group' && n.k !== 'date');
+    if (over.forceOcc && over.date) p.date = over.date;
+  }
+  if (!p.occ) {
+    const d = defaultOcc(p.date, p.negKinds);
+    p.occ = d.occ;
+    if (d.why === 'class') p.notes.unshift({ k: 'occ', t: `No occasion named. ${E.fmtDate(p.date, { weekday: 'long' })} is a class day, so this is for the ${d.g.name}.` });
+    else if (d.why === 'log') p.notes.unshift({ k: 'occ', t: 'No occasion named, so this is what the log has for that day.' });
+    else p.notes.unshift({ k: 'occ', t: 'No occasion named, so this is a casual day. Tap it to change.' });
+  }
+  p.also = (p.also || []).filter((k) => k !== p.occ);
+  if (over.label) p.label = over.label;
+  ui.ask = p; ui.date = p.date; ui.occ = p.occ; ui.locks = {}; ui.idx = 0; ui.askDay = today();
+  const e = entryFor(ui.date, ui.occ);
+  ui.editing = !!e && (!!over.editing || !fitsAsk(outfitFromEntry(e), p));
+  ui.mode = 'fit'; ui.tab = 'fit'; closeSheet();
+  await present();
+  window.scrollTo(0, 0);
+}
+function openDay(date, occ, extra) {
+  ui.ask = blankAsk(date, occ, extra); ui.date = date; ui.occ = occ; ui.locks = {}; ui.idx = 0; ui.editing = !!(extra && extra.editing); ui.askDay = today();
+  ui.mode = 'fit'; ui.tab = 'fit'; closeSheet();
+  return present();
+}
+function backToAsk() { ui.mode = 'ask'; ui.ask = null; ui.draft = ''; ui.when = null; ui.date = today(); ui.occ = null; ui.locks = {}; ui.results = []; ui.editing = false; ui.loading = ''; }
 function mockKey(o) { return E.signature(o); }
 function mockFor(o) { const m = (st().mockups || {})[mockKey(o)]; return m || null; }
 function swatch(it, big) {
@@ -85,20 +164,36 @@ const occLabel = (k) => (E.OCCASIONS[k] ? E.OCCASIONS[k].long : k);
 const groupLabel = (g) => { const x = st().profile.groups.find((y) => y.id === g); return x ? x.name : ''; };
 
 // ---------- render ----------
+let sessionTimer = null;
+function saveSession() {
+  clearTimeout(sessionTimer);
+  sessionTimer = setTimeout(() => {
+    const snap = ui.mode === 'fit' && ui.ask && !ui.loading ? { at: Date.now(), ask: ui.ask, date: ui.date, occ: ui.occ, locks: ui.locks, idx: ui.idx, editing: ui.editing } : null;
+    S.kvSet('session', snap).catch(() => {});
+  }, 300);
+}
 function render() {
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === ui.tab));
   const v = $('#view');
   if (!st().items.length) v.innerHTML = viewSetup();
-  else if (ui.tab === 'fit') v.innerHTML = viewFit();
+  else if (ui.tab === 'fit') v.innerHTML = ui.mode === 'fit' && ui.ask ? viewFit() : viewAsk();
   else if (ui.tab === 'closet') v.innerHTML = viewCloset();
   else if (ui.tab === 'log') v.innerHTML = viewLog();
   else v.innerHTML = viewMore();
   renderWeather();
   renderSheet();
   hydrateImages();
+  saveSession();
+}
+// After something changes in the background: never take the keyboard away from someone who is typing.
+function refresh() {
+  const a = document.activeElement;
+  if (a && (a.id === 'askBox' || a.id === 'refineBox')) { renderWeather(); return; }
+  if (!ui.sheet) render();
 }
 function renderWeather() {
-  const w = weatherFor(ui.forecast, ui.date);
+  const d = ui.mode === 'fit' ? ui.date : (ui.when || today());
+  const w = weatherFor(ui.forecast, d);
   $('#wx').innerHTML = st().items.length ? `<b>${Math.round(w.hi)}°</b><span>${Math.round(w.lo)}°</span><em>${esc(w.estimate ? 'avg' : (w.text || ''))}</em>` : '';
 }
 
@@ -116,19 +211,53 @@ function viewSetup() {
   </section>`;
 }
 
-function dayStrip() {
-  const days = [];
-  for (let i = 0; i < 10; i++) days.push(E.addDays(today(), i));
-  if (!days.includes(ui.date)) days.unshift(ui.date);
-  return `<div class="strip" role="tablist">${days.map((d) => {
-    const w = weatherFor(ui.forecast, d);
-    const has = st().wears.some((x) => x.date === d);
-    const lab = d === today() ? 'Today' : E.fmtDate(d, { weekday: 'short' });
-    return `<button role="tab" class="day${d === ui.date ? ' on' : ''}" data-act="day" data-date="${d}"><small>${lab}</small><b>${new Date(d + 'T12:00:00').getDate()}</b><i>${Math.round(w.hi)}°</i>${has ? '<u></u>' : ''}</button>`;
-  }).join('')}<label class="day pick"><small>Other</small><b>+</b><input type="date" data-in="pickDate" value="${ui.date}"></label></div>`;
+const dayWord = (d) => (d === today() ? 'Today' : d === E.addDays(today(), 1) ? 'Tomorrow' : E.fmtDate(d));
+function logLine(w, act = 'openLog') {
+  const its = (w.items || []).map(item).filter(Boolean);
+  const main = its.filter((i) => ['suit', 'jacket', 'top', 'bottom', 'shoes'].includes(i.cat));
+  return `<button class="logrow" data-act="${act}" data-id="${esc(w.id)}" data-date="${w.date}" data-occ="${esc(w.occ)}">
+    <span class="ld"><b>${new Date(w.date + 'T12:00:00').getDate()}</b><small>${E.fmtDate(w.date, { month: 'short' })}</small><small>${E.fmtDate(w.date, { weekday: 'short' })}</small></span>
+    <span class="lb"><span class="lt">${esc(occLabel(w.occ))}${w.status === 'planned' ? ' <em>planned</em>' : ''}</span>
+    <span class="ls">${main.map((i) => swatch(i)).join('')}</span>
+    <span class="ln">${esc(main.map((i) => i.short || i.name).join(', ') || (w.note || ''))}</span></span></button>`;
 }
-function occChips() {
-  return `<div class="chips">${Object.entries(E.OCCASIONS).map(([k, v]) => `<button class="chip${k === ui.occ ? ' on' : ''}" data-act="occ" data-occ="${k}">${esc(v.label)}</button>`).join('')}</div>`;
+// The opening screen: one question. The answer can be typed, spoken with the keyboard microphone, or tapped.
+function viewAsk() {
+  const t = today(), when = ui.when || t;
+  const quick = [[t, 'Today'], [E.addDays(t, 1), 'Tomorrow']];
+  const other = !quick.some(([d]) => d === when);
+  const wearing = st().wears.filter((w) => w.date === t && w.status === 'worn' && E.OCCASIONS[w.occ]);
+  return `<section class="ask">
+      <div class="eyebrow">${esc(E.fmtDate(t, { weekday: 'long', month: 'long', day: 'numeric' }))}</div>
+      <h1>What is the fit for?</h1>
+      <textarea id="askBox" class="askbox" rows="3" data-in="askText" data-enter="askGo" enterkeyhint="go" placeholder="Dinner tonight, then drinks" autocomplete="off">${esc(ui.draft)}</textarea>
+      <button class="btn primary" data-act="askGo">Get my fit</button>
+      <p class="fine">Say where and when, and anything you want in it. Monday class with the fedora. No jeans. More casual.</p>
+    </section>
+    <section class="sec"><h3>Or tap one</h3>
+      <div class="seg" role="group" aria-label="Day">${quick.map(([d, l]) => `<button class="${d === when ? 'on' : ''}" data-act="askWhen" data-date="${d}">${l}</button>`).join('')}
+        <label class="${other ? 'on' : ''}"><span>${other ? esc(E.fmtDate(when)) : 'Another day'}</span><input type="date" data-in="askDate" value="${when}" aria-label="Pick another day"></label></div>
+      <div class="chips wrap">${Object.entries(E.OCCASIONS).map(([k, v]) => `<button class="chip" data-act="askChip" data-occ="${k}">${esc(v.label)}</button>`).join('')}</div>
+    </section>
+    ${wearing.length ? `<section class="sec"><h3>Wearing today</h3><div class="card list">${wearing.map((w) => logLine(w, 'gotoDay')).join('')}</div></section>` : ''}`;
+}
+// What was asked, how it was read, and a place to change it.
+function askBar() {
+  const a = ui.ask, occ = E.OCCASIONS[ui.occ] || E.OCCASIONS.casual;
+  const also = (a.also || []).filter((k) => E.OCCASIONS[k] && k !== ui.occ);
+  const said = a.text ? `<q>${esc(a.text)}</q>` : esc(a.label || '');
+  const again = '<button class="link" data-act="askAgain">New question</button>';
+  return `<div class="card asked">
+    ${said ? `<div class="asked-top"><div class="said">${said}</div>${again}</div>` : ''}
+    <div class="pills">
+      <label class="pill"><span>${esc(dayWord(ui.date))}</span><input type="date" data-in="pillDate" value="${ui.date}" aria-label="Change the day"></label>
+      <button class="pill" data-act="pickOcc">${esc(occ.long)}</button>
+      ${also.map((k) => `<span class="pill plain">+ ${esc(E.OCCASIONS[k].long)}</span>`).join('')}
+      ${said ? '' : again}
+    </div>
+    ${(a.notes || []).length ? `<ul class="notes">${a.notes.map((n) => `<li>${esc(n.t)}</li>`).join('')}</ul>` : ''}
+    <div class="refine"><input type="text" id="refineBox" data-enter="refine" enterkeyhint="go" placeholder="Change something" aria-label="Change something about this fit" autocomplete="off"><button class="btn small" data-act="refine">Go</button></div>
+  </div>`;
 }
 function rowHtml(r, logged) {
   const lab = r.label || E.SLOT_LABEL[r.slot];
@@ -138,14 +267,25 @@ function rowHtml(r, logged) {
   return `<button class="row" ${logged ? 'disabled' : `data-act="swap" data-slot="${r.slot}"`}>
     ${swatch(r.item)}<span class="rt"><span class="rl">${esc(lab)}${locked ? ' · locked' : ''}</span><span class="rn">${name}${note}</span></span>${logged ? '' : '<span class="chev" aria-hidden="true"></span>'}</button>`;
 }
+// Every factor that was checked for this fit, problems first.
+function checksHtml(checks) {
+  if (!checks.length) return '';
+  const open = checks.filter((c) => c.level === 'bad' || c.level === 'note');
+  const clear = checks.filter((c) => c.level === 'ok').length;
+  const rank = { bad: 0, note: 1, ok: 2, you: 3 };
+  const rows = checks.slice().sort((x, y) => rank[x.level] - rank[y.level]);
+  return `<div class="checks"><h3>Checked <span${open.length ? ' class="open"' : ''}>${open.length ? `${open.length} to look at` : `all ${clear} clear`}</span></h3>
+    <ul>${rows.map((c) => `<li class="${c.level}"><i aria-hidden="true"></i><span><b>${esc(c.k)}</b>${esc(c.t)}</span></li>`).join('')}</ul></div>`;
+}
 function viewFit() {
+  if (ui.loading) return `${askBar()}<div class="card"><div class="busy"><div class="spinner"></div><p>${esc(ui.loading)}</p></div></div>`;
   const c = current();
-  const occ = E.OCCASIONS[ui.occ];
+  const occ = E.OCCASIONS[ui.occ] || E.OCCASIONS.casual;
   const past = E.daysBetween(ui.date, today()) > 0;
   const isToday = ui.date === today();
   let body = '';
   if (c.logged && !c.o.complete) {
-    body = `<div class="card"><div class="eyebrow">${c.entry.status === 'planned' ? 'Planned' : 'Logged'}</div>
+    body = `<div class="card"><div class="eyebrow">${c.entry.status === 'planned' ? 'Planned' : 'Logged'} · ${esc(occ.long)}</div>
       <ul class="plain">${(c.entry.items || []).map((id) => `<li>${swatch(item(id))}<span>${esc(nameOf(id))}</span></li>`).join('')}</ul>
       ${c.entry.note ? `<p class="note">${esc(c.entry.note)}</p>` : ''}
       <div class="actions"><button class="btn" data-act="editEntry">Build a full fit for this day</button></div></div>`;
@@ -158,6 +298,8 @@ function viewFit() {
     const count = !c.logged && ui.results.length > 1 ? `<span class="count">${ui.idx + 1} of ${ui.results.length}</span>` : '';
     body = `<div class="card fit">
       <div class="fit-head"><div><div class="eyebrow">${esc(status)} · ${esc(occ.long)}</div><h2>${esc(E.fmtDate(ui.date, { weekday: 'long', month: 'long', day: 'numeric' }))}</h2></div>${count}</div>
+      ${c.logged && c.entry.status === 'planned' && !past ? '<p class="fine">You locked this in earlier. It was checked again just now.</p>' : ''}
+      ${!c.logged && ui.relaxed ? `<p class="error">${esc(ui.relaxed)}</p>` : ''}
       <div class="look${mk ? ' has-photo' : ''}">
         <div class="visual" data-act="mockup">${mk ? `<img data-blob="${esc(mk.blob)}" alt="Mockup of this fit on you">` : figureSvg(c.o, st().items)}
           <span class="visual-tag">${mk ? 'ChatGPT mockup' : 'Sketch'}</span></div>
@@ -165,7 +307,7 @@ function viewFit() {
       </div>
       ${c.entry && c.entry.note && c.logged ? `<p class="note">${esc(c.entry.note)}</p>` : ''}
       ${c.why.length ? `<div class="why"><h3>Why it works</h3><p>${c.why.map(esc).join(' ')}</p></div>` : ''}
-      ${c.flags.length ? `<div class="flags"><h3>Flags</h3><ul>${c.flags.map((f) => `<li>${esc(f)}</li>`).join('')}</ul></div>` : ''}
+      ${checksHtml(c.checks)}
       <div class="actions">
         ${c.logged
           ? `${c.entry.status === 'planned' && (past || isToday) ? '<button class="btn primary" data-act="markWorn">I wore it</button>' : ''}
@@ -179,10 +321,10 @@ function viewFit() {
       ${c.logged ? '<button class="link danger" data-act="removeEntry">Remove from the log</button>' : (c.entry ? '<button class="link" data-act="cancelEdit">Keep the logged fit</button>' : '')}
     </div>`;
   } else {
-    body = `<div class="card"><h2>No fit clears the rules</h2><p>Nothing in the closet fits this day with those locked pieces. Clear a lock or pick another occasion.</p>
-      ${Object.keys(ui.locks).length ? '<div class="actions"><button class="btn primary" data-act="clearLocks">Clear locked pieces</button></div>' : ''}</div>`;
+    body = `<div class="card"><h2>No fit clears the rules</h2><p>Nothing in the closet works for this with those pieces. Clear a locked piece, change what you asked for above, or ask again.</p>
+      <div class="actions">${Object.keys(ui.locks).length ? '<button class="btn primary" data-act="clearLocks">Clear locked pieces</button>' : ''}<button class="btn" data-act="askAgain">New question</button></div></div>`;
   }
-  return `${dayStrip()}${occChips()}${body}`;
+  return `${askBar()}${body}`;
 }
 
 function lastWorn(id) {
@@ -214,17 +356,8 @@ function viewLog() {
   const f = ui.logFilter;
   const ws = st().wears.filter((w) => f === 'all' || (f === 'other' ? !w.group : w.group === f)).slice().sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const chips = [['all', 'All'], ...st().profile.groups.map((g) => [g.id, g.name]), ['other', 'Other']];
-  const line = (w) => {
-    const its = (w.items || []).map(item).filter(Boolean);
-    const main = its.filter((i) => ['suit', 'jacket', 'top', 'bottom', 'shoes'].includes(i.cat));
-    return `<button class="logrow" data-act="openLog" data-id="${esc(w.id)}">
-      <span class="ld"><b>${new Date(w.date + 'T12:00:00').getDate()}</b><small>${E.fmtDate(w.date, { month: 'short' })}</small><small>${E.fmtDate(w.date, { weekday: 'short' })}</small></span>
-      <span class="lb"><span class="lt">${esc(occLabel(w.occ))}${w.status === 'planned' ? ' <em>planned</em>' : ''}</span>
-      <span class="ls">${main.map((i) => swatch(i)).join('')}</span>
-      <span class="ln">${esc(main.map((i) => i.short || i.name).join(', ') || (w.note || ''))}</span></span></button>`;
-  };
   return `<div class="chips">${chips.map(([k, l]) => `<button class="chip${k === f ? ' on' : ''}" data-act="logFilter" data-f="${k}">${esc(l)}</button>`).join('')}</div>
-    <div class="card list">${ws.map(line).join('') || '<p class="empty">Nothing logged yet. Lock in a fit and it lands here.</p>'}</div>`;
+    <div class="card list">${ws.map((w) => logLine(w)).join('') || '<p class="empty">Nothing logged yet. Lock in a fit and it lands here.</p>'}</div>`;
 }
 
 function viewMore() {
@@ -263,9 +396,14 @@ function renderSheet() {
   else if (s.type === 'mockup') inner = sheetMockup(s);
   else if (s.type === 'paste') inner = sheetPaste(s);
   else if (s.type === 'add') inner = sheetAdd(s);
+  else if (s.type === 'occ') inner = sheetOcc(s);
   else if (s.type === 'confirm') inner = `<h2>${esc(s.title)}</h2><p>${esc(s.text)}</p><div class="actions"><button class="btn danger" data-act="confirmYes">${esc(s.yes)}</button><button class="btn" data-act="closeSheet">Cancel</button></div>`;
   el.innerHTML = `<div class="backdrop" data-act="closeSheet"></div><div class="panel" role="dialog" aria-modal="true"><div class="grab" data-act="closeSheet"></div>${inner}</div>`;
   el.hidden = false; document.body.classList.add('sheet-open');
+}
+function sheetOcc() {
+  return `<h2>What kind of day</h2><p class="fine">Pick the one the fit is for. The fit is rebuilt and checked again.</p>
+    <div class="rows sheet-rows">${Object.entries(E.OCCASIONS).map(([k, v]) => `<button class="row pick${k === ui.occ ? ' cur' : ''}" data-act="setOcc" data-occ="${k}"><span class="rn">${esc(v.long)}</span>${k === ui.occ ? '<span class="tick" aria-label="current"></span>' : ''}</button>`).join('')}</div>`;
 }
 function sheetSwap(s) {
   const lab = E.SLOT_LABEL[s.slot] || 'Tuck';
@@ -314,7 +452,7 @@ function sheetLog(s) {
     <div class="rows sheet-rows">${list}</div>
     <label class="field"><span>Note</span><textarea data-in="logNote" data-id="${esc(w.id)}" rows="2">${esc(w.note || '')}</textarea></label>
     <div class="actions wrap"><button class="btn small" data-act="toggleWorn" data-id="${esc(w.id)}">${w.status === 'planned' ? 'Mark as worn' : 'Mark as planned'}</button>
-      <button class="btn small" data-act="gotoDay" data-date="${w.date}" data-occ="${w.occ}">Open in Fit</button>
+      <button class="btn small" data-act="gotoDay" data-date="${w.date}" data-occ="${esc(w.occ)}">Open in Fit</button>
       <button class="btn small danger" data-act="delLog" data-id="${esc(w.id)}">Delete</button></div>`;
 }
 function sheetMockup(s) {
@@ -356,14 +494,37 @@ function sheetAdd() {
 
 // ---------- actions ----------
 const A = {
-  tab: (d) => { ui.tab = d.tab; closeSheet(); render(); window.scrollTo(0, 0); },
-  day: (d) => setDate(d.date),
-  occ: (d) => { ui.occ = d.occ; ui.lastOcc = d.occ; ui.locks = {}; ui.editing = false; recompute(); render(); },
+  tab: (d) => { if (d.tab === 'fit' && ui.tab === 'fit' && ui.mode === 'fit' && !ui.sheet) backToAsk(); ui.tab = d.tab; closeSheet(); render(); window.scrollTo(0, 0); },
+  askGo: () => {
+    const box = $('#askBox'); const v = ((box ? box.value : ui.draft) || '').trim();
+    if (!v) { toast('Say what it is for, or tap one below.'); return null; }
+    ui.draft = '';
+    return answer(v, { date: ui.when && ui.when !== today() ? ui.when : null });
+  },
+  askChip: (d) => answer('', { date: ui.when || today(), occ: d.occ, forceOcc: true }),
+  askWhen: (d) => { ui.when = d.date; ui.date = d.date; render(); },
+  askAgain: () => { backToAsk(); closeSheet(); render(); window.scrollTo(0, 0); },
+  refine: () => {
+    const box = $('#refineBox'); const v = ((box && box.value) || '').trim();
+    if (!v || !ui.ask) return null;
+    const a = ui.ask;
+    const probe = parseAsk(v, { today: today(), date: ui.date, items: st().items, profile: st().profile });
+    if (probe.occSaid) return answer(v, { date: ui.date, editing: true });           // a new occasion is a new question, same day unless a day is named
+    return answer(a.text ? a.text + '. ' + v : v, { date: probe.dateSaid ? probe.date : ui.date, fixDate: true, occ: ui.occ, forceOcc: true, also: a.also, editing: true, label: a.label });
+  },
+  pickOcc: () => openSheet({ type: 'occ' }),
+  setOcc: (d) => {
+    const a = ui.ask; if (!a || !E.OCCASIONS[d.occ]) return null;
+    a.occ = d.occ; a.occSaid = true; a.pinned = true; a.also = (a.also || []).filter((k) => k !== d.occ); a.notes = (a.notes || []).filter((n) => n.k === 'missing');
+    ui.occ = d.occ; ui.locks = {}; ui.editing = false; closeSheet();
+    return present();
+  },
   another: () => { if (ui.results.length) { ui.idx = (ui.idx + 1) % ui.results.length; render(); } },
   clearLocks: () => { ui.locks = {}; recompute(); render(); },
   swap: (d) => {
     const c = current(); if (!c.o) return;
-    const alts = E.alternatives(ctx(), c.o, d.slot === 'top' && false ? 'tuck' : d.slot, omit(ui.locks, d.slot));
+    const b = brief();
+    const alts = E.alternatives(ctx(), c.o, d.slot, omit(b.locks, d.slot), b);
     openSheet({ type: 'swap', slot: d.slot, alts });
   },
   pickAlt: (d) => {
@@ -377,7 +538,11 @@ const A = {
     const c = current(); if (!c.o) return;
     const occ = E.OCCASIONS[ui.occ];
     const past = E.daysBetween(ui.date, today()) >= 0;
-    const rec = { id: 'w-' + ui.date + '-' + ui.occ, date: ui.date, occ: ui.occ, group: occ.group || null, items: E.majorIds(c.o), tuck: c.o.tuck, note: '', status: past ? 'worn' : 'planned' };
+    const rec = { id: 'w-' + ui.date + '-' + ui.occ, date: ui.date, occ: ui.occ, group: occ.group || null, items: E.majorIds(c.o), tuck: c.o.tuck, note: (ui.ask && ui.ask.text) || '', status: past ? 'worn' : 'planned' };
+    if (c.o.also && c.o.also.length) rec.also = c.o.also;
+    if (c.o.shift) rec.shift = c.o.shift;
+    if (c.o.easy) rec.easy = true;
+    if (c.o.lab) rec.lab = true;
     st().wears = st().wears.filter((w) => !(w.date === ui.date && w.occ === ui.occ));
     st().wears.push(rec);
     ui.editing = false; ui.locks = {};
@@ -397,7 +562,7 @@ const A = {
   openLog: (d) => openSheet({ type: 'log', id: d.id }),
   toggleWorn: (d) => { const w = st().wears.find((x) => x.id === d.id); if (w) { w.status = w.status === 'planned' ? 'worn' : 'planned'; S.save(); render(); openSheet({ type: 'log', id: d.id }); } },
   delLog: (d) => { st().wears = st().wears.filter((x) => x.id !== d.id); S.save(); closeSheet(); recompute(); render(); },
-  gotoDay: (d) => { closeSheet(); ui.tab = 'fit'; ui.date = d.date; ui.occ = d.occ; ui.locks = {}; ui.editing = false; recompute(); render(); },
+  gotoDay: (d) => openDay(d.date, d.occ),
   item: (d) => openSheet({ type: 'item', id: d.id }),
   addItem: () => openSheet({ type: 'add' }),
   saveNew: () => {
@@ -414,7 +579,11 @@ const A = {
     st().items.push(it); S.save(); closeSheet(); recompute(); render(); toast('Added to the closet.');
   },
   delItem: (d) => openSheet({ type: 'confirm', title: 'Delete this piece?', text: 'It leaves the closet for good. To pause it instead, turn off In rotation.', yes: 'Delete', run: () => { st().items = st().items.filter((i) => i.id !== d.id); S.save(); recompute(); } }),
-  wearItem: (d) => { const it = item(d.id); if (!it) return; closeSheet(); ui.tab = 'fit'; ui.editing = true; ui.locks = { [it.cat === 'suit' ? 'jacket' : it.cat]: it.id }; recompute(); render(); },
+  wearItem: (d) => {
+    const it = item(d.id); if (!it) return null;
+    const t = today(), slot = it.cat === 'suit' ? 'jacket' : it.cat;
+    return openDay(t, defaultOcc(t).occ, { label: 'A fit around the ' + (it.short || it.name), locks: { [slot]: it.id }, mods: it.cat === 'suit' ? { wantSuit: true } : {}, pinned: false, occSaid: false, editing: true });
+  },
   itemPhoto: async (d) => {
     const [f] = await pickFile('image/*'); if (!f) return;
     const b = await M.downscale(f, 1280, 0.88); const id = 'item:' + d.id;
@@ -480,7 +649,12 @@ const A = {
     if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file] }); } catch (e) { /* closed */ } }
     else { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = file.name; a.click(); }
   },
-  refreshWeather: async () => { ui.forecast = await loadForecast(st().profile, true); recompute(); render(); toast('Weather updated.'); },
+  refreshWeather: async () => {
+    const was = ui.forecast ? ui.forecast.at : 0;
+    ui.forecast = await loadForecast(st().profile, true);
+    if (ui.mode === 'fit') recompute();
+    refresh(); toast(ui.forecast.at && ui.forecast.at !== was ? 'Weather updated.' : 'No connection. Using the last forecast.');
+  },
   importFile: async () => {
     const [f] = await pickFile('.json,application/json,text/plain'); if (!f) return;
     try { await doImport(JSON.parse(await f.text())); } catch (e) { toast(e.message || 'That file could not be read.', 4000); }
@@ -499,7 +673,7 @@ const A = {
     if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file] }); } catch (e) { /* closed */ } }
     else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = file.name; a.click(); }
   },
-  erase: () => openSheet({ type: 'confirm', title: 'Erase everything on this phone?', text: 'Closet, log, photos, mockups and the key are removed. Back up first if you want to keep them.', yes: 'Erase', run: async () => { for (const k of await S.blobKeys()) await S.blobDel(k); await S.secretSet('openai', null); ui.hasKey = false; await S.replaceState(S.EMPTY_STATE()); E.configure(st().profile); ui.results = []; } }),
+  erase: () => openSheet({ type: 'confirm', title: 'Erase everything on this phone?', text: 'Closet, log, photos, mockups and the key are removed. Back up first if you want to keep them.', yes: 'Erase', run: async () => { for (const k of await S.blobKeys()) await S.blobDel(k); await S.secretSet('openai', null); ui.hasKey = false; await S.replaceState(S.EMPTY_STATE()); E.configure(st().profile); backToAsk(); } }),
 };
 function omit(obj, k) { const o = Object.assign({}, obj); delete o[k]; return o; }
 async function saveMock(o, blob, model) {
@@ -517,14 +691,19 @@ async function doImport(obj) {
   E.configure(st().profile);
   await S.persist();
   ui.forecast = await loadForecast(st().profile);
-  ui.date = today(); ui.occ = defaultOcc(ui.date); ui.locks = {}; ui.editing = false; ui.tab = 'fit';
-  recompute(); render(); toast(`Closet loaded: ${st().items.length} pieces.`);
+  backToAsk(); ui.tab = 'fit';
+  render(); toast(`Closet loaded: ${st().items.length} pieces.`);
 }
 
 // ---------- inputs ----------
 const IN = {
   q: (el) => { ui.q = el.value; const v = $('#view'); const pos = el.selectionStart; v.innerHTML = viewCloset(); hydrateImages(v); const n = $('[data-in="q"]'); n.focus(); n.setSelectionRange(pos, pos); },
-  pickDate: (el) => { if (el.value) setDate(el.value); },
+  askText: (el) => { ui.draft = el.value; },
+  askDate: (el) => { if (el.value) { ui.when = el.value; ui.date = el.value; render(); } },
+  pillDate: (el) => {
+    const a = ui.ask; if (!el.value || !a) return null;
+    return answer(a.text, Object.assign({ date: el.value, fixDate: true, label: a.label }, a.pinned ? { occ: ui.occ, forceOcc: true, also: a.also } : {}));
+  },
   quality: (el) => { st().settings.quality = el.value; S.save(); },
   model: (el) => { st().settings.model = el.value; S.save(); },
   scene: (el) => { st().settings.setting = el.value; S.save(); renderSheet(); hydrateImages($('#sheet')); },
@@ -537,26 +716,56 @@ const IN = {
 };
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act]'); if (!t || t.disabled) return;
-  const fn = A[t.dataset.act]; if (fn) { e.preventDefault(); Promise.resolve(fn(t.dataset, t)).catch((err) => { console.error(err); toast('Something went wrong. Try again.'); }); }
+  const fn = A[t.dataset.act]; if (fn) { e.preventDefault(); Promise.resolve(fn(t.dataset, t)).catch((err) => fail(err)); }
 });
-document.addEventListener('input', (e) => { const t = e.target.closest('[data-in]'); if (t && ['q'].includes(t.dataset.in)) IN[t.dataset.in](t); });
-document.addEventListener('change', (e) => { const t = e.target.closest('[data-in]'); if (t && t.dataset.in !== 'q' && IN[t.dataset.in]) IN[t.dataset.in](t); });
+const LIVE = ['q', 'askText'];
+const fail = (err) => { console.error(err); ui.loading = ''; toast('Something went wrong. Try again.'); };
+document.addEventListener('input', (e) => { const t = e.target.closest('[data-in]'); if (t && LIVE.includes(t.dataset.in)) IN[t.dataset.in](t); });
+document.addEventListener('change', (e) => { const t = e.target.closest('[data-in]'); if (t && !LIVE.includes(t.dataset.in) && IN[t.dataset.in]) Promise.resolve(IN[t.dataset.in](t)).catch(fail); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+  const t = e.target.closest('[data-enter]'); const fn = t && A[t.dataset.enter];
+  if (fn) { e.preventDefault(); t.blur(); Promise.resolve(fn(t.dataset, t)).catch(fail); }
+});
 
 // ---------- boot ----------
+const AWAY_MS = 10 * 60 * 1000;
 async function boot() {
   await S.loadState();
   E.configure(st().profile);
   ui.hasKey = !!(await S.secretGet('openai').catch(() => null));
-  ui.occ = defaultOcc(ui.date);
-  recompute(); render();
+  // Coming straight back (from ChatGPT, say) returns to the fit that was open. Otherwise the app starts on the question.
+  const snap = await S.kvGet('session').catch(() => null);
+  if (snap && snap.ask && Date.now() - snap.at < AWAY_MS && snap.date >= today() && E.OCCASIONS[snap.occ] && st().items.length) {
+    Object.assign(ui, { mode: 'fit', ask: snap.ask, date: snap.date, occ: snap.occ, locks: snap.locks || {}, editing: !!snap.editing });
+    recompute(); ui.idx = Math.min(snap.idx || 0, Math.max(0, ui.results.length - 1));
+  }
+  render();
   ui.forecast = await loadForecast(st().profile);
-  recompute(); render();
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (ui.mode === 'fit') { const keep = ui.idx; recompute(); ui.idx = Math.min(keep, Math.max(0, ui.results.length - 1)); }
+  refresh();
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    // A new release takes over on its own: the page reloads once when the new files are in place.
+    const had = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!had || reloaded || ui.busy) return;
+      const a = document.activeElement;
+      if (a && (a.id === 'askBox' || a.id === 'refineBox') && a.value) return;
+      reloaded = true; location.reload();
+    });
+    navigator.serviceWorker.register('sw.js').then((reg) => { ui.sw = reg; }).catch(() => {});
+  }
+  let hiddenAt = 0;
   document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState !== 'visible') return;
-    if (ui.date < today() && !ui.sheet) { ui.date = today(); ui.occ = defaultOcc(ui.date); ui.locks = {}; ui.editing = false; }
-    ui.forecast = await loadForecast(st().profile); if (!ui.sheet) { recompute(); render(); }
+    if (document.visibilityState !== 'visible') { hiddenAt = Date.now(); return; }
+    if (ui.sw) ui.sw.update().catch(() => {});
+    const away = hiddenAt && Date.now() - hiddenAt > AWAY_MS;
+    if ((ui.askDay !== today() || (away && ui.mode === 'fit')) && !ui.sheet && !ui.busy) { ui.askDay = today(); backToAsk(); }   // after time away, or on a new day, it starts with the question again
+    ui.forecast = await loadForecast(st().profile);
+    if (ui.mode === 'fit' && !ui.sheet) { const keep = ui.idx; recompute(); ui.idx = Math.min(keep, Math.max(0, ui.results.length - 1)); }
+    refresh();
   });
 }
-window.PF = { ui, S, E, M, doImport };
-boot();
+window.PF = { ui, S, E, M, doImport, answer, parseAsk };
+boot().catch((e) => { console.error(e); render(); });
