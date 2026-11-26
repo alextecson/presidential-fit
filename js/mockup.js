@@ -1,5 +1,5 @@
 // Presidential Fit: realistic mockups of a fit, with you as the model, made by ChatGPT's image engine.
-// Two routes: (1) in the app, through the OpenAI API with your own key; (2) hand off to your ChatGPT app.
+// Three routes: (1) in the app, through the OpenAI API with your own key; (2) on your own Mac, through js/link.js; (3) hand off to your ChatGPT app.
 import { rows, SLOT_LABEL, OCCASIONS, colorOf } from './engine.js';
 
 export const MODELS = ['gpt-image-2.6-sunburst', 'gpt-image-2.5-sunburst', 'gpt-image-2', 'gpt-image-1.5'];
@@ -30,13 +30,17 @@ function pieceLine(r) {
   return `${label}: ${d}`;
 }
 
-export function buildPrompt(o, items, profile, sceneKey = 'auto', photoCount = 1) {
+// The brief for one fit: what he wears, line by line, and where he stands. Plain text only, so it can be sent to his Mac as is.
+export function briefFor(o, items, profile, sceneKey = 'auto') {
   const rs = rows(o, items);
   const lines = rs.map(pieceLine).filter(Boolean);
   const belt = rs.find((r) => r.slot === 'belt');
   if (belt && !belt.item) lines.push('BELT: none');
   const all = scenesFor(profile);
   const scene = sceneKey !== 'auto' && all[sceneKey] ? all[sceneKey].text : (OCCASIONS[o.occ] || OCCASIONS.casual).scene;
+  return { lines, scene };
+}
+export function promptFrom(lines, scene, photoCount = 1) {
   const who = photoCount > 1 ? `the man shown in the first ${photoCount} reference photos` : 'the man shown in the first reference photo';
   return [
     `Create one photorealistic full length photograph of ${who}.`,
@@ -49,6 +53,10 @@ export function buildPrompt(o, items, profile, sceneKey = 'auto', photoCount = 1
     `Setting: ${scene}.`,
     'Framing: vertical, head to toe including the shoes, standing naturally, relaxed posture, eye level camera, 50mm lens look, natural light, true to life color. No text, no watermark, no extra people, no added logos.',
   ].join('\n');
+}
+export function buildPrompt(o, items, profile, sceneKey = 'auto', photoCount = 1) {
+  const b = briefFor(o, items, profile, sceneKey);
+  return promptFrom(b.lines, b.scene, photoCount);
 }
 
 export async function downscale(blob, max = 1536, quality = 0.9) {
