@@ -18,7 +18,7 @@ launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 if [ "${1:-}" = "remove" ]; then rm -f "$PLIST"; rm -rf "$DIR/helper"; echo "Helper removed. Private files stay in $DIR."; exit 0; fi
 [ -f "$DIR/profile.json" ] && [ -f "$DIR/me.jpg" ] || { echo "Put profile.json and me.jpg in $DIR first."; exit 1; }
 mkdir -p "$DIR/helper" "$HOME/Library/LaunchAgents"
-cp "$SRC/mac/helper.mjs" "$SRC/js/link.js" "$SRC/js/mockup.js" "$SRC/js/engine.js" "$DIR/helper/"
+cp "$SRC/mac/helper.mjs" "$SRC/js/link.js" "$SRC/js/mockup.js" "$SRC/js/engine.js" "$SRC/js/check.js" "$DIR/helper/"
 cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

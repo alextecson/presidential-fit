@@ -81,7 +81,9 @@ function pieceLine(r) {
 // The brief for one fit: what he wears, line by line, and where he stands. Plain text only, so it can be sent to his Mac as is.
 // place = { venue, spot, when }: the place he named, or the kind of place, and the part of the day. It becomes the backdrop.
 export function briefFor(o, items, profile, sceneKey = 'auto', place = null) {
-  const rs = rows(o, items);
+  const all_ = rows(o, items);
+  const shades = all_.some((r) => r.slot === 'extra' && r.item && r.item.sub === 'sunglasses');       // sunglasses take the place of his frames in the picture
+  const rs = all_.filter((r) => !(shades && r.slot === 'glasses'));
   const lines = rs.map(pieceLine).filter(Boolean);
   const belt = rs.find((r) => r.slot === 'belt');
   if (belt && !belt.item) lines.push('BELT: none');

@@ -1,6 +1,8 @@
 // Presidential Fit: the outfit engine.
 // Builds outfits ONLY from the closet, applies the standing rules as hard limits,
 // then ranks what is left on palette, formality, weather and what each group has already seen.
+// The closet is not the whole wardrobe: a piece the wearer names that is not listed is added to it first (see ask.js),
+// and a piece named outright is always worn, with the check list saying where it bends a rule.
 
 export const COLORS = {
   black: { hex: '#17181b', tone: 'cool', d: 9, label: 'black' },
@@ -47,9 +49,13 @@ export const CATS = [
   { id: 'suit', label: 'Suits' }, { id: 'jacket', label: 'Jackets' }, { id: 'coat', label: 'Coats' },
   { id: 'top', label: 'Shirts and knits' }, { id: 'bottom', label: 'Trousers' }, { id: 'shoes', label: 'Shoes' },
   { id: 'belt', label: 'Belts' }, { id: 'socks', label: 'Socks' }, { id: 'watch', label: 'Watches' },
-  { id: 'glasses', label: 'Glasses' }, { id: 'hat', label: 'Hats' },
+  { id: 'glasses', label: 'Glasses' }, { id: 'hat', label: 'Hats' }, { id: 'extra', label: 'Accessories' },
 ];
-export const SLOT_LABEL = { hat: 'Hat', coat: 'Coat', suit: 'Suit', jacket: 'Jacket', top: 'Top', bottom: 'Bottom', belt: 'Belt', shoes: 'Shoes', socks: 'Socks', watch: 'Watch', glasses: 'Glasses' };
+export const SLOT_LABEL = { hat: 'Hat', coat: 'Coat', suit: 'Suit', jacket: 'Jacket', top: 'Top', bottom: 'Bottom', belt: 'Belt', shoes: 'Shoes', socks: 'Socks', watch: 'Watch', glasses: 'Glasses', extra: 'Accessory' };
+// Accessories ride along with a fit when the wearer asks for them. The stylist neither picks nor rates them.
+export const EXTRA_LABEL = { tie: 'Tie', bowtie: 'Bow tie', scarf: 'Scarf', gloves: 'Gloves', vest: 'Vest', waistcoat: 'Waistcoat', sunglasses: 'Sunglasses', pocketsquare: 'Pocket square', bracelet: 'Bracelet', necklace: 'Necklace',
+  chain: 'Chain', ring: 'Ring', cufflinks: 'Cufflinks', suspenders: 'Suspenders', bandana: 'Bandana', backpack: 'Backpack', bag: 'Bag', briefcase: 'Briefcase', umbrella: 'Umbrella', earring: 'Earring' };
+export const extraLabel = (it) => (it && EXTRA_LABEL[it.sub]) || 'Accessory';
 
 // lo/hi = formality band (1 very casual .. 5 full suit). jacket: 'required' | 'preferred' | 'optional'. say = the name used mid sentence.
 const BASE_OCCASIONS = {
@@ -124,6 +130,7 @@ export function seenBy(wears, group, itemId) {
 
 // ---------- solver ----------
 // opts.locks: slot -> id or 'none', always kept. opts.allow: slot -> ids the wearer asked to choose from. opts.exclude: ids left out.
+// opts.extras: accessories to carry along. opts.force: the named pieces go in even where they break a hard rule (the check list says so).
 // opts.mods: also (other stops in the plan), shift (dressier or more relaxed), lab, golf, theme, wantSuit, noSuit, noDenim.
 export function solve(ctx, opts = {}) {
   const occ = OCCASIONS[ctx.occ] || OCCASIONS.casual;
@@ -131,6 +138,7 @@ export function solve(ctx, opts = {}) {
   const exclude = opts.exclude instanceof Set ? opts.exclude : new Set(opts.exclude || []);
   const prefer = opts.prefer || null;
   const mods = opts.mods || {};
+  const force = !!opts.force;
   const allow = {};
   for (const [k, v] of Object.entries(opts.allow || {})) {
     const set = v instanceof Set ? v : new Set(v || []);
@@ -165,6 +173,7 @@ export function solve(ctx, opts = {}) {
   const by = (cat) => ctx.items.filter((i) => i.cat === cat && usable(i) && (!allow[cat] || allow[cat].has(i.id)) && (!['top', 'bottom', 'shoes', 'jacket'].includes(cat) || inBand(i)));
   const get = (id) => ctx.items.find((i) => i.id === id);
 
+  const extras = [...new Set(opts.extras || [])].filter((id) => { const x = get(id); return x && x.cat === 'extra' && x.status !== 'retired'; });
   const watches = by('watch'), glassesAll = by('glasses'), belts = by('belt'), socksAll = by('socks'), hats = by('hat');
   const suits = by('suit'), jackets = by('jacket'), tops = by('top'), shoesAll = by('shoes'), coats = by('coat');
   const bottoms = by('bottom').filter((b) => !(mods.noDenim && isDenim(b) && locks.bottom !== b.id));
@@ -210,11 +219,11 @@ export function solve(ctx, opts = {}) {
         for (const top of tops) {
           if (locks.top && locks.top !== top.id) continue;
           if (top.color === 'pink' && pinkYesterday && locks.top !== top.id) continue;   // no pink back to back
-          if (jacket && solo(top)) continue;                                              // worn on its own, never under a jacket
+          if (jacket && solo(top) && !force) continue;                                    // worn on its own, never under a jacket
           for (const shoes of shoesAll) {
             if (locks.shoes && locks.shoes !== shoes.id) continue;
             if (wet && shoes.suede && locks.shoes !== shoes.id) continue;
-            if (shoes.metal && shoes.metal !== watch.metal) continue;            // shoe hardware follows the watch
+            if (shoes.metal && shoes.metal !== watch.metal && !force) continue;  // shoe hardware follows the watch
             const o = assemble({ watch, metal, st, jacket, bottom, top, shoes });
             if (o) results.push(o);
           }
@@ -252,14 +261,17 @@ export function solve(ctx, opts = {}) {
         .sort((a, b) => b.s - a.s);
       if (locks.belt && locks.belt !== 'none') {
         const lb = get(locks.belt);
-        if (!lb || lb.metal !== metal || leatherMatch(lb, shoes) <= -3) return null;   // buckle must match the watch, leather the shoes
-        belt = lb; score += Math.min(leatherMatch(lb, shoes), 0.5);
+        if (!lb) return null;
+        const clash = (!!lb.metal && lb.metal !== metal) || leatherMatch(lb, shoes) <= -3;   // buckle must match the watch, leather the shoes
+        if (clash && !force) return null;
+        belt = lb; score += clash ? -3 : Math.min(leatherMatch(lb, shoes), 0.5);
       } else if (options.length && locks.belt !== 'none' && (wantBelt || tuck === 'tucked' || (!soft && options[0].s >= 0.5))) {
         belt = options[0].b; score += Math.min(options[0].s, 0.5);
       } else if ((tuck === 'tucked' || wantBelt) && locks.belt !== 'none') {
-        return null;                                    // tucked with visible loops needs a belt
+        if (!force) return null;                        // tucked with visible loops needs a belt
+        belt = belts.filter((b) => b.metal === metal).sort((x, y) => leatherMatch(y, shoes) - leatherMatch(x, shoes))[0] || null; score -= 3;
       }
-    } else if ((locks.belt && locks.belt !== 'none') || wantBelt) return null;
+    } else if (((locks.belt && locks.belt !== 'none') || wantBelt) && !force) return null;
 
     // ---- palette: the watch sets the metal, the metal sets warm or cool ----
     const brownShoes = BROWNS.includes(shoes.leather);
@@ -274,7 +286,11 @@ export function solve(ctx, opts = {}) {
     // ---- glasses follow the watch ----
     const gOpts = glassesAll.filter((g) => (metal === 'gold' ? (g.metal === 'tortoise' || g.metal === 'gold') : g.metal === 'silver'));
     let glasses = null;
-    if (locks.glasses) { glasses = gOpts.find((g) => g.id === locks.glasses); if (!glasses) return null; }
+    if (locks.glasses) {                                                       // a pair named outright with no metal on record goes with either watch
+      const lg = get(locks.glasses);
+      glasses = gOpts.find((g) => g.id === locks.glasses) || (lg && lg.cat === 'glasses' && (force || !lg.metal) ? lg : null);
+      if (!glasses) return null;
+    }
     else glasses = gOpts.sort((a, b) => (a.rank || 5) - (b.rank || 5))[0] || null;
     if (allow.glasses && !glasses) return null;
 
@@ -446,7 +462,7 @@ export function solve(ctx, opts = {}) {
     return {
       score,
       o: { occ: ctx.occ, date: ctx.date, suit: isSuit ? jacket.id : null, jacket: jacket ? jacket.id : 'none', top: top.id, bottom: bottom.id, belt: belt ? belt.id : 'none', shoes: shoes.id, socks: socks ? socks.id : null, watch: watch.id, glasses: glasses ? glasses.id : null, coat: coat ? coat.id : null, hat: hat ? hat.id : null, tuck,
-        also: plan.slice(1), shift: sh || 0, easy: friday && !(occ.casualDays || []).includes(day), lab: !!mods.lab },
+        also: plan.slice(1), shift: sh || 0, easy: friday && !(occ.casualDays || []).includes(day), lab: !!mods.lab, extras: extras.slice() },
       why,
     };
   }
@@ -480,6 +496,7 @@ export function audit(ctx, o) {
   const belt = o.belt && o.belt !== 'none' ? get(o.belt) : null;
   const socks = o.socks ? get(o.socks) : null, glasses = o.glasses ? get(o.glasses) : null;
   const coat = o.coat ? get(o.coat) : null, hat = o.hat ? get(o.hat) : null;
+  const extras = (o.extras || []).map(get).filter(Boolean);
   const out = [];
   const add = (k, level, t, short) => { out.push(short ? { k, level, t, short } : { k, level, t }); };
   if (!top || !bottom || !shoes || !watch) { add('Closet', 'bad', 'A piece of this fit is no longer in the closet.'); return out; }
@@ -517,16 +534,22 @@ export function audit(ctx, o) {
   // only what is owned and in rotation
   const gone = pieces.filter((it) => it.status === 'retired');
   if (gone.length) add('Closet', 'bad', `${cap(listAnd(gone.map(nm)))} ${gone.length > 1 ? 'are' : 'is'} out of rotation.`);
-  else add('Closet', 'ok', `All ${pieces.length} pieces are in your closet.`);
+  else {
+    const said = pieces.concat(extras).filter((it) => it.said);      // pieces he named that the closet did not list
+    add('Closet', 'ok', said.length ? `All ${pieces.length + extras.length} pieces are yours. ${cap(listAnd(said.map((it) => 'the ' + nm(it))))} came from your words, so ${said.length > 1 ? 'their' : 'its'} details are my best reading.` : `All ${pieces.length} pieces are in your closet.`);
+    const blank = said.filter((it) => !it.color && it.cat !== 'extra' && it.cat !== 'watch');
+    if (blank.length) add('Closet', 'you', `No colour on record for the ${listAnd(blank.map(nm))}. The mockup guesses it.`);
+  }
 
   // the watch sets the metal
   const metal = watch.metal;
   const off = [];
   if (belt && belt.metal && metal && belt.metal !== metal) off.push(`the ${belt.metal} buckle`);
-  if (glasses && metal && !(metal === 'gold' ? ['gold', 'tortoise'].includes(glasses.metal) : glasses.metal === metal)) off.push(`the ${nm(glasses)}`);
+  if (glasses && glasses.metal && metal && !(metal === 'gold' ? ['gold', 'tortoise'].includes(glasses.metal) : glasses.metal === metal)) off.push(`the ${nm(glasses)}`);
   if (shoes.metal && metal && shoes.metal !== metal) off.push(`the ${shoes.metal} hardware on the shoes`);
   if (off.length) add('Metals', 'bad', `The ${nm(watch)} sets ${metal}. ${cap(listAnd(off))} ${off.length > 1 ? 'break' : 'breaks'} it.`);
   else add('Metals', 'ok', `${cap(metal || 'one metal')} throughout: ${listAnd([nm(watch)].concat(belt && belt.metal ? [`${belt.metal} buckle`] : [], glasses ? [nm(glasses)] : []))}.`);
+  if (belt && !belt.metal && metal) add('Metals', 'you', `Check that the buckle on the ${nm(belt)} is ${metal}.`);
   const goldStop = plan.find((k) => OCCASIONS[k].gold);
   if (goldStop && metal !== 'gold') add('Metals', 'note', `${cap(sayOf(goldStop))} calls for the gold watch under your rules.`);
 
@@ -558,7 +581,7 @@ export function audit(ctx, o) {
   const sh = occ.teach ? Math.max(0, o.shift || 0) : (o.shift || 0);
   if (sh) { bandLo = Math.max(1, Math.min(4.5, bandLo + sh)); bandHi = Math.min(5, Math.max(bandLo + 1, bandHi + sh)); }
   const wrong = majors.filter((it) => (it.formality || 3) < bandLo - 1 || (it.formality || 3) > bandHi + 1);
-  if (wrong.length) add('Dress level', 'note', `The ${listAnd(wrong.map(nm))} ${wrong.length > 1 ? 'sit' : 'sits'} outside the dress level for ${sayOf(key)}.`);
+  if (wrong.length) add('Dress level', 'note', `The ${listAnd(wrong.map(nm))} ${wrong.length > 1 || /[^s]s$/.test(nm(wrong[0])) ? 'sit' : 'sits'} outside the dress level for ${sayOf(key)}.`);
   else add('Dress level', 'ok', `Right level for ${listAnd(plan.map(sayOf))}.`);
   if (isDenim(bottom) && key === 'dressy') add('Dress level', 'bad', 'Jeans are below a special occasion.');
 
@@ -606,6 +629,7 @@ export function audit(ctx, o) {
     else add('Socks', 'ok', jacket ? 'Mid calf socks with tailoring.' : 'Mid calf socks.');
   }
 
+  if (extras.length) add('Accessories', 'you', `${cap(listAnd(extras.map((x) => 'the ' + nm(x))))}: in because you asked. Matching ${extras.length > 1 ? 'them' : 'it'} to the rest is yours to check.`);
   if (hat) add('Hat', 'you', `${hat.name}: outdoors only. Off when you walk in, off while you lecture, off in the lounge.`);
   if (hat && metal && (colorOf(hat).tone === 'warm') !== (metal === 'gold') && colorOf(hat).tone !== 'neutral') add('Hat', 'note', `The ${nm(hat)} is a ${colorOf(hat).tone} piece on a ${metal === 'gold' ? 'warm, gold' : 'cool, silver'} fit.`);
   if (occ.teach || occ.jacket !== 'optional') add('Yours to check', 'you', 'Pressed, lint free, shoes conditioned, nothing faded.');
@@ -668,8 +692,8 @@ export function listAnd(a, word = 'and') {
   return a.slice(0, -1).join(', ') + ` ${word} ` + a[a.length - 1];
 }
 
-export const majorIds = (o) => [o.suit || (o.jacket !== 'none' ? o.jacket : null), o.suit ? null : o.bottom, o.top, o.shoes, o.belt !== 'none' ? o.belt : null, o.socks, o.watch, o.glasses, o.coat, o.hat].filter(Boolean);
-export const signature = (o) => [o.suit || o.jacket, o.top, o.bottom, o.belt, o.shoes, o.socks, o.watch, o.glasses, o.coat || '', o.hat || '', o.tuck].join('|');
+export const majorIds = (o) => [o.suit || (o.jacket !== 'none' ? o.jacket : null), o.suit ? null : o.bottom, o.top, o.shoes, o.belt !== 'none' ? o.belt : null, o.socks, o.watch, o.glasses, o.coat, o.hat].concat(o.extras || []).filter(Boolean);
+export const signature = (o) => [o.suit || o.jacket, o.top, o.bottom, o.belt, o.shoes, o.socks, o.watch, o.glasses, o.coat || '', o.hat || '', o.tuck].join('|') + ((o.extras || []).length ? '|+' + o.extras.slice().sort().join('+') : '');
 
 // Rows to show, top to toe, in the order the stylist lists them.
 export function rows(o, items) {
@@ -682,6 +706,9 @@ export function rows(o, items) {
   else r.push({ slot: 'jacket', item: null, note: 'none' });
   const top = get(o.top);
   r.push({ slot: 'top', item: top, note: o.tuck === 'tucked' ? 'fully tucked' : 'untucked', tuck: true });
+  const ex = (o.extras || []).map(get).filter(Boolean).map((x) => ({ slot: 'extra', label: extraLabel(x), item: x, note: 'you asked for it' }));
+  const chest = (x) => ['tie', 'bowtie', 'scarf', 'vest', 'waistcoat', 'pocketsquare', 'necklace', 'chain', 'suspenders'].includes(x.item.sub);   // worn at the chest: listed with the shirt
+  r.push(...ex.filter(chest));
   if (!o.suit) r.push({ slot: 'bottom', item: get(o.bottom) });
   const b = get(o.suit || o.bottom);
   r.push({ slot: 'belt', item: o.belt && o.belt !== 'none' ? get(o.belt) : null, note: o.belt && o.belt !== 'none' ? '' : (b && b.loops === false ? 'no loops' : '') });
@@ -689,6 +716,7 @@ export function rows(o, items) {
   r.push({ slot: 'socks', item: o.socks ? get(o.socks) : null });
   r.push({ slot: 'watch', item: get(o.watch) });
   r.push({ slot: 'glasses', item: o.glasses ? get(o.glasses) : null });
+  r.push(...ex.filter((x) => !chest(x)));
   return r;
 }
 

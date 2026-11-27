@@ -141,3 +141,62 @@ export async function askMac(link, brief, { signal, onStage, onDone, fresh = fal
     if (acked && Date.now() - ackedAt > totalMs) throw new LinkError('Your Mac took too long. Try again.', 'macerr');
   }
 }
+
+// Ask the Mac to look at a photograph: the finished look against its plan, or how one piece fits.
+// plan = { mode: 'look' | 'piece', occasion, lines }. photo: a JPEG Blob. Resolves to the reading from check.js:
+// { verdict, pieces, fix, good }. The Mac answers "ready" with a key made for this one request, the photograph goes up sealed
+// with it, and the answer comes back sealed the same way. Both keys are thrown away afterwards.
+export async function askCheck(link, plan, photo, { signal, onStage, ackMs = 25000, patienceMs = 300000, totalMs = 240000 } = {}) {
+  const pair = await newPair();
+  const id = hex(crypto.getRandomValues(new Uint8Array(8)));
+  const started = Date.now();
+  const since = Math.floor(started / 1000) - 3;
+  await post(link.req, await seal(link.key, { v: 1, id, t: started, pub: pair.pub, kind: 'check', mode: plan.mode === 'piece' ? 'piece' : 'look', occasion: plan.occasion || '', lines: plan.lines }), signal);
+  const drop = () => { seal(link.key, { v: 1, cancel: id, t: Date.now() }).then((m) => post(link.req, m)).catch(() => {}); };
+  if (signal) signal.addEventListener('abort', drop, { once: true });
+  const stop = () => { if (signal && signal.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; throw e; } };
+  const nap = (ms) => new Promise((res) => {
+    if (!signal) { setTimeout(res, ms); return; }
+    const done = () => { clearTimeout(t); signal.removeEventListener('abort', done); res(); };
+    const t = setTimeout(done, ms);
+    signal.addEventListener('abort', done);
+  });
+  let key = null, sentAt = 0, asleep = false;
+  for (;;) {
+    stop();
+    await nap(sentAt ? 2500 : asleep ? 8000 : 2000);
+    stop();
+    let msgs = [];
+    try { msgs = await read(link.res, since, signal); }
+    catch (e) { if (e && e.name === 'AbortError') throw e; if (e && e.busy) await sleep(6000); }
+    for (const m of msgs) {
+      const s = await open(link.key, m.message);
+      if (!s || s.id !== id) continue;
+      if (s.st === 'error') throw new LinkError(s.msg || 'Your Mac could not check the photo.', 'macerr');
+      if (s.st === 'ready' && !key && typeof s.pub === 'string') {
+        key = await sessionKey(pair.priv, s.pub, id);
+        if (onStage) onStage({ st: 'sending' });
+        const sealed = await sealBytes(key, new Uint8Array(await photo.arrayBuffer()));
+        const note = await seal(link.key, { v: 1, id, t: Date.now(), part: 'photo' });
+        // the sealed photograph rides as an attachment of a message on the request topic
+        const res = await fetch(`${RELAY}/${link.req}?filename=${id}.bin&message=${encodeURIComponent(note)}`, { method: 'POST', body: sealed, signal });
+        if (!res.ok) throw new LinkError('The photo could not be sent. Try again.', 'relay');
+        sentAt = Date.now();
+        if (onStage) onStage({ st: 'looking' });
+      }
+      if (s.st === 'checked' && key && m.attachment && m.attachment.url) {
+        const res = await fetch(m.attachment.url, { cache: 'no-store', signal });
+        if (!res.ok) throw new LinkError('The answer could not be fetched from the relay. Try again.', 'relay');
+        const plain = await openBytes(key, await res.arrayBuffer());
+        let out = null;
+        try { out = plain ? JSON.parse(td.decode(plain)) : null; } catch (e) { out = null; }
+        if (!out) throw new LinkError('The answer arrived damaged. Try again.', 'relay');
+        return out;
+      }
+    }
+    const waited = Date.now() - started;
+    if (!key && !asleep && waited > ackMs) { asleep = true; if (onStage) onStage({ st: 'asleep' }); }
+    if (!key && waited > patienceMs) { drop(); throw new LinkError('Your Mac is not answering. The photo check runs on your Mac with your ChatGPT plan, so it has to be awake and online. Wake it, then try again.', 'mac'); }
+    if (sentAt && Date.now() - sentAt > totalMs) throw new LinkError('Your Mac took too long. Try again.', 'macerr');
+  }
+}

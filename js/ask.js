@@ -67,35 +67,47 @@ const DESC = set(`dark light pale bright deep solid plain striped stripe stripes
   sleeved collar collared open custom tailored tailor dress casual formal mid calf ribbed quilted reversible unstructured structured metal gold silver steel stainless tortoise tortoiseshell yellow white black
   grey charcoal navy blue indigo cream ivory pink stone khaki tan camel cognac brown olive green sage burgundy maroon mustard purple lavender lilac taupe slate red rust beige offwhite noshow golf felt fine medium
   lining sole wedge grain pebble crew neck band point spread`);
+// More words that single out one particular piece: cloths, cuts and colours the closet's own list does not use.
+const STYLE = set(`denim corduroy velvet flannel fleece cashmere tweed seersucker chambray silk satin nylon twill herringbone houndstooth gingham paisley floral camo graphic printed hawaiian hooded zip varsity track biker
+  moto field chore harrington cargo pleated ripped distressed skinny chelsea chukka desert combat hiking running basketball boat aviator bucket baseball trucker newsboy cowboy orange teal turquoise coral peach mint oxblood`);
 const COLOR_WORDS = {
   navy: ['navy', 'blue'], indigo: ['indigo', 'blue', 'dark'], blue: ['blue'], 'light-blue': ['blue', 'light'], slate: ['slate', 'blue', 'grey'],
   charcoal: ['charcoal', 'grey', 'dark'], grey: ['grey'], 'light-grey': ['grey', 'light'], black: ['black'],
   white: ['white'], 'off-white': ['white', 'offwhite', 'cream', 'ivory'], cream: ['cream', 'ivory', 'offwhite'],
-  stone: ['stone', 'beige'], khaki: ['khaki', 'tan', 'beige'], tan: ['tan', 'beige'], camel: ['camel', 'tan'], cognac: ['cognac', 'brown'], brown: ['brown'], 'dark-brown': ['brown', 'dark'],
+  stone: ['stone', 'beige'], khaki: ['khaki', 'tan', 'beige'], tan: ['tan', 'beige', 'camel'], camel: ['camel', 'tan'], cognac: ['cognac', 'brown'], brown: ['brown'], 'dark-brown': ['brown', 'dark'],
   olive: ['olive', 'green'], green: ['green', 'dark'], sage: ['sage', 'green'], burgundy: ['burgundy', 'maroon', 'red'], red: ['red'], pink: ['pink'], mustard: ['mustard', 'yellow'],
   purple: ['purple'], lavender: ['lavender', 'purple', 'lilac'], taupe: ['taupe'], gold: ['gold'], silver: ['silver'], tortoise: ['tortoise', 'tortoiseshell'],
 };
 const COLOR_SET = new Set(Object.values(COLOR_WORDS).flat().filter((w) => !['dark', 'light'].includes(w)).concat(['yellow', 'orange', 'teal', 'turquoise']));
-const CAT_WORDS = { suit: ['suit'], jacket: ['jacket', 'blazer'], coat: ['coat'], bottom: ['pants'], shoes: ['shoes'], belt: ['belt'], socks: ['socks'], watch: ['watch'], glasses: ['glasses', 'frames'], hat: ['hat'], top: [] };
+const CAT_WORDS = { suit: ['suit'], jacket: ['jacket', 'blazer'], coat: ['coat'], bottom: ['pants'], shoes: ['shoes'], belt: ['belt'], socks: ['socks'], watch: ['watch'], glasses: ['glasses', 'frames'], hat: ['hat'], top: [], extra: [] };
 const SUB_WORDS = {
   'knit-polo': ['polo', 'knit'], polo: ['polo'], ocbd: ['oxford', 'buttondown'], 'dress-shirt': ['dress'], 'camp-shirt': ['camp'], tee: ['tee'], sweater: ['sweater'],
   jeans: ['jeans'], loafer: ['loafers'], oxford: ['oxford', 'oxfords'], derby: ['derby', 'derbies'], driver: ['drivers', 'mocs', 'moccasins', 'loafers'], sneaker: ['sneakers'], slide: ['slides', 'sandals'],
-  boot: ['boots'], 'no-show': ['noshow'],
+  boot: ['boots'], 'no-show': ['noshow'], shorts: ['shorts'], jogger: ['joggers', 'sweatpants'],
 };
 const NAME_SYN = { trilby: ['fedora'], wingtips: ['brogues'], puffer: ['parka'], trench: ['raincoat'] };     // what people also call it
-// Garment words, and which part of the closet each one points at. An empty list means the closet has no slot for it.
+// Garment words, and which part of the closet each one points at. 'extra' is anything worn that the stylist neither picks
+// nor rates: ties, scarves, vests, jewellery, bags.
 const NOUNS = {
-  suit: ['suit'], tux: ['suit'], tuxedo: ['suit'], jacket: ['jacket'], blazer: ['jacket'],
+  suit: ['suit'], tux: ['suit'], tuxedo: ['suit'], jacket: ['jacket'], blazer: ['jacket'], bomber: ['jacket'], overshirt: ['jacket'], shacket: ['jacket'], windbreaker: ['jacket'],
   coat: ['coat'], trench: ['coat'], puffer: ['coat'], parka: ['coat'], peacoat: ['coat'], raincoat: ['coat'],
-  shirt: ['top'], polo: ['top'], sweater: ['top'], tee: ['top'], buttondown: ['top'], turtleneck: ['top'], henley: ['top'], cardigan: ['top'], hoodie: ['top'],
-  pants: ['bottom'], jeans: ['bottom'], shorts: ['bottom'],
+  shirt: ['top'], polo: ['top'], sweater: ['top'], tee: ['top'], buttondown: ['top'], turtleneck: ['top'], henley: ['top'], cardigan: ['top'], hoodie: ['top'], sweatshirt: ['top'], pullover: ['top'], jersey: ['top'], guayabera: ['top'],
+  pants: ['bottom'], jeans: ['bottom'], shorts: ['bottom'], joggers: ['bottom'], sweatpants: ['bottom'],
   shoes: ['shoes'], loafers: ['shoes'], sneakers: ['shoes'], oxfords: ['shoes'], wingtips: ['shoes'], boots: ['shoes'], boot: ['shoes'], drivers: ['shoes'], slides: ['shoes'], sandals: ['shoes'], brogues: ['shoes'], derbies: ['shoes'], mocs: ['shoes'], moccasins: ['shoes'],
-  belt: ['belt'], socks: ['socks'], watch: ['watch'], glasses: ['glasses'], frames: ['glasses'], sunglasses: ['glasses'], shades: ['glasses'],
-  hat: ['hat'], fedora: ['hat'], trilby: ['hat'], cap: ['hat'], beanie: ['hat'],
-  tie: [], bowtie: [], scarf: [], gloves: [], vest: [], waistcoat: [],
+  espadrilles: ['shoes'], flipflops: ['shoes'], slippers: ['shoes'], crocs: ['shoes'], jordans: ['shoes'], dunks: ['shoes'], yeezys: ['shoes'], vans: ['shoes'], converse: ['shoes'], chucks: ['shoes'], nikes: ['shoes'], adidas: ['shoes'], allbirds: ['shoes'], sambas: ['shoes'], hokas: ['shoes'], uggs: ['shoes'], timbs: ['shoes'], timberlands: ['shoes'],
+  belt: ['belt'], socks: ['socks'], watch: ['watch'], glasses: ['glasses'], frames: ['glasses'],
+  hat: ['hat'], fedora: ['hat'], trilby: ['hat'], cap: ['hat'], beanie: ['hat'], visor: ['hat'], snapback: ['hat'], panama: ['hat'],
+  tie: ['extra'], bowtie: ['extra'], scarf: ['extra'], gloves: ['extra'], vest: ['extra'], waistcoat: ['extra'], sunglasses: ['extra'], pocketsquare: ['extra'], bracelet: ['extra'], necklace: ['extra'], chain: ['extra'],
+  ring: ['extra'], cufflinks: ['extra'], suspenders: ['extra'], bandana: ['extra'], backpack: ['extra'], bag: ['extra'], briefcase: ['extra'], umbrella: ['extra'], earring: ['extra'],
 };
 const CANON = [
-  [/\b(trousers|slacks|chinos|pant)\b/g, 'pants'], [/\bkhakis\b/g, 'khaki pants'], [/\bdenims?\b/g, 'jeans'], [/\bt ?shirts?\b|\btees\b/g, 'tee'], [/\bbutton ?downs?\b/g, 'buttondown'],
+  [/\b(jean|denim|trucker) jackets?\b/g, 'denim jacket'], [/\bbomber jackets?\b|\bbombers\b/g, 'bomber'], [/\bpuffer (?:jacket|coat)s?\b|\bpuffers\b/g, 'puffer'], [/\brain ?(?:jacket|coat)s?\b/g, 'raincoat'],
+  [/\bflannels?\b(?! shirt)/g, 'flannel shirt'], [/\bbow ?ties?\b/g, 'bowtie'], [/\bpocket ?squares?\b/g, 'pocketsquare'], [/\bflip ?flops?\b/g, 'flipflops'], [/\bties\b/g, 'tie'], [/\bscarves\b|\bscarfs\b/g, 'scarf'],
+  [/\bvests\b/g, 'vest'], [/\bhoodies\b|\bhoody\b/g, 'hoodie'], [/\bsweat ?shirts?\b/g, 'sweatshirt'], [/\bsweat ?pants\b|\bsweats\b/g, 'sweatpants'], [/\bjogger\b/g, 'joggers'], [/\bcargos\b/g, 'cargo pants'],
+  [/\bcorduroys\b|\bcords\b/g, 'corduroy pants'], [/\bchelseas\b/g, 'chelsea boots'], [/\bchukkas\b/g, 'chukka boots'], [/\bsun ?glasses\b|\bshades\b|\bsunnies\b/g, 'sunglasses'], [/\bcuff ?links?\b/g, 'cufflinks'],
+  [/\btuxedos\b/g, 'tuxedo'], [/\bbracelets\b/g, 'bracelet'], [/\bnecklaces\b/g, 'necklace'], [/\bchains\b/g, 'chain'], [/\brings\b/g, 'ring'], [/\bearrings\b/g, 'earring'], [/\bcaps\b/g, 'cap'], [/\bbeanies\b/g, 'beanie'],
+  [/\bhenleys\b/g, 'henley'], [/\bturtlenecks\b/g, 'turtleneck'], [/\bcardigans\b/g, 'cardigan'], [/\bpullovers\b/g, 'pullover'], [/\bjerseys\b/g, 'jersey'], [/\bslipper\b/g, 'slippers'], [/\bsandal\b/g, 'sandals'],
+  [/\b(trousers|slacks|chinos|pant)\b/g, 'pants'], [/\bkhakis\b/g, 'khaki pants'], [/\bdenims?\b(?! jacket| shirt)/g, 'jeans'], [/\bt ?shirts?\b|\btees\b/g, 'tee'], [/\bbutton ?downs?\b/g, 'buttondown'],
   [/\bsports? ?(coat|jacket)s?\b|\bblazers\b/g, 'blazer'], [/\b(over|top)coats?\b/g, 'coat'], [/\bsweaters\b/g, 'sweater'], [/\bpolos\b/g, 'polo'], [/\bshirts\b/g, 'shirt'],
   [/\bjackets\b/g, 'jacket'], [/\bsuits\b/g, 'suit'], [/\bhats\b/g, 'hat'], [/\bbelts\b/g, 'belt'], [/\bcoats\b/g, 'coat'], [/\bwatches\b/g, 'watch'], [/\bsneaker\b|\btrainers\b|\bkicks\b/g, 'sneakers'],
   [/\bloafer\b/g, 'loafers'], [/\bwingtip\b/g, 'wingtips'], [/\bshoe\b/g, 'shoes'], [/\bsock\b/g, 'socks'], [/\bpennies\b/g, 'penny loafers'], [/\bframe\b/g, 'frames'],
@@ -114,6 +126,7 @@ function clean(t) {
     .replace(/[^a-z0-9/| ]+/g, ' ')
     .replace(/\s+/g, ' ').trim();
 }
+const MATERIALS = set('leather suede linen denim wool corduroy velvet flannel fleece cashmere tweed seersucker chambray silk satin nylon canvas knit');
 function nameTokens(str) {
   const s = canon(String(str || '').toLowerCase().replace(/[‘’'`]/g, '').replace(/([a-z0-9])-(?=[a-z0-9])/g, '$1').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim());
   return s.split(' ').filter((w) => w.length > 1 && !STOP.has(w));
@@ -132,6 +145,8 @@ function buildIndex(items) {
     if (it.metal) { strong.add(it.metal); if (it.metal === 'silver') { weak.add('steel'); weak.add('stainless'); } if (it.metal === 'tortoise') strong.add('tortoiseshell'); }
     if (it.pattern === 'stripe') ['striped', 'stripes', 'stripe'].forEach((w) => weak.add(w));
     if (it.pattern === 'check') ['check', 'checked', 'plaid'].forEach((w) => weak.add(w));
+    if (it.suede) weak.add('suede');
+    for (const m of clean(it.notes || '').split(' ')) if (MATERIALS.has(m)) weak.add(m);        // "linen" written only in its notes still finds it
     (COLOR_WORDS[it.color] || [it.color]).forEach((w, i) => { if (w) (i === 0 ? strong : weak).add(w); });
     for (const w of [...own]) (NAME_SYN[w] || []).forEach((x) => weak.add(x));
     own.forEach((w) => { strong.add(w); });
@@ -170,16 +185,157 @@ function resolve(span, idx, { neg, intent }) {
   return { rows, slot: [...slots][0], head };
 }
 
+// ---------- pieces he owns that the closet does not list yet ----------
+// The closet is not the whole wardrobe. A piece he names that nothing in the closet matches is taken as his: it is described
+// here from his words (out.fresh), and the app adds it to the closet and puts it in the fit.
+const GENERIC_DESC = set('dark light pale bright deep solid plain slim long short sleeve sleeved collar collared open custom tailored tailor dress casual formal mid calf ribbed stretch tech mesh fine medium lining sole wedge grain pebble crew neck band point spread structured unstructured reversible noshow golf metal stainless steel cotton');
+const specific = (w) => COLOR_SET.has(w) || STYLE.has(w) || (DESC.has(w) && !GENERIC_DESC.has(w));
+// Words before a garment that describe a mood, not a particular piece.
+const ADJ = set(`favorite favourite usual regular normal different another nicer better fresh clean lucky trusty classic simple basic stylish cute sexy heavy lightweight thin thick thicker lighter darker warmer cooler
+  loose tight fitted baggy newer expensive cheap real actual whole matching appropriate proper decent wrong breathable soft cozy crisp pressed ironed everyday daily signature staple trendy modern timeless versatile neutral
+  bold loud quiet subtle statement colorful colourful second third spare extra backup super kinda pretty quite rather certain particular specific random similar`);
+const COLOR_KEY = { navy: 'navy', indigo: 'indigo', blue: 'blue', slate: 'slate', charcoal: 'charcoal', grey: 'grey', black: 'black', white: 'white', offwhite: 'off-white', cream: 'cream', ivory: 'cream', stone: 'stone', beige: 'stone',
+  khaki: 'khaki', tan: 'tan', camel: 'camel', cognac: 'cognac', brown: 'brown', olive: 'olive', green: 'green', sage: 'sage', burgundy: 'burgundy', maroon: 'burgundy', red: 'red', pink: 'pink', mustard: 'mustard', purple: 'purple',
+  lavender: 'lavender', lilac: 'lavender', taupe: 'taupe', yellow: 'yellow', orange: 'orange', teal: 'teal', turquoise: 'turquoise', coral: 'coral', peach: 'peach', mint: 'mint', oxblood: 'oxblood', rust: 'rust' };
+// Colours outside the closet's own palette: the swatch, and whether they read warm or cool.
+const MORE_COLORS = { yellow: ['#e3c53a', 'warm'], orange: ['#d9772b', 'warm'], teal: ['#1f6f73', 'cool'], turquoise: ['#3bb3b0', 'cool'], coral: ['#e8765c', 'warm'], peach: ['#f1c3a0', 'warm'], mint: ['#b7e1cd', 'cool'], oxblood: ['#4a1c22', 'warm'], rust: ['#9a4a22', 'warm'] };
+// What a garment word says about a piece: its kind, how dressy it usually is, and what else follows from it.
+const KIND = {
+  polo: ['polo', 2.5, { untuckOk: true }], tee: ['tee', 1, { untuckOk: true, warmth: 0 }], shirt: ['shirt', 3, { untuckOk: false }], buttondown: ['ocbd', 4, { untuckOk: false }],
+  sweater: ['sweater', 3, { untuckOk: true, warmth: 3 }], turtleneck: ['sweater', 3.5, { untuckOk: true, warmth: 3 }], cardigan: ['sweater', 3, { untuckOk: true, warmth: 3 }], pullover: ['sweater', 2.5, { untuckOk: true, warmth: 3 }],
+  hoodie: ['sweater', 1, { untuckOk: true, warmth: 3, tuck: 'untucked-only' }], sweatshirt: ['sweater', 1.5, { untuckOk: true, warmth: 3, tuck: 'untucked-only' }], henley: ['tee', 1.5, { untuckOk: true }],
+  jersey: ['tee', 1, { untuckOk: true, tuck: 'untucked-only' }], guayabera: ['camp-shirt', 2.5, { untuckOk: true, warmth: 0, tuck: 'untucked-only' }],
+  pants: [null, 3.5, { loops: true }], jeans: ['jeans', 2.5, { loops: true }], shorts: ['shorts', 1, { loops: true }], joggers: ['jogger', 1, { loops: false, athletic: true }], sweatpants: ['jogger', 1, { loops: false, athletic: true }],
+  shoes: [null, 3, {}], sneakers: ['sneaker', 1.5, { leather: 'none' }], loafers: ['loafer', 3.5, {}], oxfords: ['oxford', 4, {}], wingtips: ['oxford', 3.5, {}], brogues: ['oxford', 3.5, {}], derbies: ['derby', 3, {}],
+  boots: ['boot', 3, {}], boot: ['boot', 3, {}], drivers: ['driver', 2, { leather: 'none' }], mocs: ['driver', 2, { leather: 'none' }], moccasins: ['driver', 2, { leather: 'none' }], espadrilles: ['driver', 2, { leather: 'none' }],
+  slides: ['slide', 1, { leather: 'none' }], sandals: ['slide', 1, { leather: 'none' }], flipflops: ['slide', 1, { leather: 'none' }], slippers: ['slide', 1, { leather: 'none' }], crocs: ['slide', 1, { leather: 'none' }],
+  jordans: ['sneaker', 1.5, { leather: 'none' }], dunks: ['sneaker', 1.5, { leather: 'none' }], yeezys: ['sneaker', 1.5, { leather: 'none' }], vans: ['sneaker', 1.5, { leather: 'none' }], converse: ['sneaker', 1.5, { leather: 'none' }],
+  chucks: ['sneaker', 1.5, { leather: 'none' }], nikes: ['sneaker', 1.5, { leather: 'none' }], adidas: ['sneaker', 1.5, { leather: 'none' }], allbirds: ['sneaker', 1.5, { leather: 'none' }], sambas: ['sneaker', 1.5, { leather: 'none' }],
+  hokas: ['sneaker', 1, { leather: 'none' }], uggs: ['boot', 1, { leather: 'none' }], timbs: ['boot', 1.5, {}], timberlands: ['boot', 1.5, {}],
+  jacket: [null, 3, { warmth: 2, unstructured: true }], blazer: [null, 4, { warmth: 2 }], bomber: [null, 2, { warmth: 2, casual: true, unstructured: true }], overshirt: [null, 2, { warmth: 1, casual: true, unstructured: true }],
+  shacket: [null, 2, { warmth: 2, casual: true, unstructured: true }], windbreaker: [null, 1.5, { warmth: 1, casual: true, unstructured: true }],
+  suit: [null, 5, { loops: true }], tux: [null, 5, { loops: true }], tuxedo: [null, 5, { loops: true }],
+  coat: [null, 4, { warmth: 3 }], trench: [null, 4, { warmth: 2 }], raincoat: [null, 2.5, { warmth: 2 }], peacoat: [null, 3.5, { warmth: 3 }], puffer: [null, 1.5, { warmth: 3 }], parka: [null, 1.5, { warmth: 3 }],
+  hat: [null, 2, {}], fedora: [null, 3, {}], trilby: [null, 3, {}], panama: [null, 3, {}], cap: [null, 1, {}], beanie: [null, 1, {}], visor: [null, 1, {}], snapback: [null, 1, {}],
+  belt: [null, 3, {}], socks: [null, 3, {}], watch: [null, 5, {}], glasses: [null, 3, {}], frames: [null, 3, {}],
+};
+const ROUGH = set('leather denim suede varsity track biker moto field chore harrington fleece hooded zip camo');     // a jacket in these is a casual one
+const lev = (a, b, max) => {                                          // edit distance with swaps, given up on once it passes max
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev2 = null, prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]; let low = i;
+    for (let j = 1; j <= b.length; j++) {
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      cur[j] = v; if (v < low) low = v;
+    }
+    if (low > max) return max + 1;
+    prev2 = prev; prev = cur;
+  }
+  return prev[b.length];
+};
+// The colour a run of words names, in the closet's own terms.
+function colourIn(words) {
+  const has = (w) => words.includes(w);
+  const cw = words.filter((w) => COLOR_KEY[w]);
+  let color = cw.length ? COLOR_KEY[cw[0]] : '';
+  if (has('light') && (color === 'blue' || color === 'grey')) color = 'light-' + color;
+  if (has('dark')) color = color === 'brown' ? 'dark-brown' : color === 'grey' ? 'charcoal' : color === 'blue' ? 'navy' : color;
+  return color;
+}
+// "red", "they are red", "the boots are brown": a message that only gives the colour of a piece added without one.
+// names: the words of that piece's name. Returns what to set on the piece, or null when the message says anything else.
+export function colourSaid(text, names = []) {
+  const ws = canon(clean(text)).split(' ').filter((w) => w && w !== '|');
+  const known = new Set(names.flatMap((n) => nameTokens(n)));
+  const other = ws.filter((w) => !COLOR_KEY[w] && !['light', 'dark', 'they', 'them', 'theyre', 'both', 'ones', 'pair', 'color', 'colour', 'colored', 'coloured'].includes(w) && !STOP.has(w) && !FILL.has(w) && !known.has(w) && !known.has(sing(w)));
+  const color = colourIn(ws);
+  if (!color || other.length) return null;
+  const word = ws.find((w) => COLOR_KEY[w]);
+  const out = { color, word: (ws.includes('light') && color.startsWith('light-') ? 'light ' : ws.includes('dark') && ['dark-brown', 'charcoal', 'navy'].includes(color) && word !== 'navy' && word !== 'charcoal' ? 'dark ' : '') + word };
+  if (MORE_COLORS[color]) { out.hex = MORE_COLORS[color][0]; out.tone = MORE_COLORS[color][1]; }
+  return out;
+}
+// The piece his words describe. words: the garment phrase as the parser reads it. said: the same phrase in his own words.
+function pieceFrom(words, head, said, text) {
+  const cat = (NOUNS[head] || ['extra'])[0];
+  const has = (w) => words.includes(w);
+  const it = { cat };
+  // the name is his own wording, capitalised the way he typed it when he bothered to
+  const typed = new RegExp(said.join('[^a-z0-9]+'), 'i').exec(text || '');
+  const raw = (typed ? typed[0] : said.join(' ')).replace(/\s+/g, ' ').trim();
+  it.name = /[A-Z]/.test(raw.slice(1)) ? raw : raw[0].toUpperCase() + raw.slice(1).toLowerCase();
+  it.short = /[A-Z]/.test(it.name.slice(1)) ? it.name : it.name.toLowerCase();
+  // colour
+  let color = colourIn(words);
+  if (!color && head === 'jeans') color = 'indigo';
+  if (!color && (head === 'tux' || head === 'tuxedo')) color = 'black';
+  if (color) { it.color = color; if (MORE_COLORS[color]) { it.hex = MORE_COLORS[color][0]; it.tone = MORE_COLORS[color][1]; } }
+  if (has('striped') || has('stripe') || has('stripes') || has('pinstripe')) it.pattern = 'stripe';
+  else if (['check', 'checked', 'plaid', 'gingham', 'houndstooth'].some(has)) it.pattern = 'check';
+  else { const pt = ['floral', 'paisley', 'camo', 'graphic', 'printed', 'hawaiian', 'herringbone'].find(has); if (pt) it.pattern = pt; }
+  if (cat === 'extra') { it.sub = head; return it; }
+  const [sub, level, more] = KIND[head] || [null, 3, {}];
+  if (sub) it.sub = sub;
+  it.formality = level;
+  Object.assign(it, more);
+  if (cat === 'top') {
+    if (has('dress') && head === 'shirt') { it.sub = 'dress-shirt'; it.formality = 5; }
+    else if (has('knit') && head === 'polo') { it.sub = 'knit-polo'; it.formality = 3; it.warmth = 2; }
+    else if (has('linen')) { it.formality = Math.min(it.formality, 2.5); it.warmth = 0; it.untuckOk = true; }
+    else if (has('flannel')) { it.formality = 2; it.warmth = 2; it.untuckOk = true; }
+    else if (['hawaiian', 'floral', 'camp'].some(has) && head === 'shirt') { it.sub = 'camp-shirt'; it.formality = 2; it.warmth = 0; it.untuckOk = true; it.tuck = 'untucked-only'; }
+    else if (has('denim') || has('chambray')) { it.formality = 2.5; it.untuckOk = true; }
+  }
+  if (cat === 'bottom') {
+    if (has('dress')) it.formality = 4;
+    else if (said.includes('chinos') || has('khaki')) it.formality = 3;
+    else if (has('cargo') || has('ripped') || has('distressed')) it.formality = 1.5;
+    else if (has('linen')) it.formality = 2.5;
+    else if (has('corduroy')) it.formality = 3;
+  }
+  if (cat === 'jacket' && head === 'jacket') {
+    if (words.some((w) => ROUGH.has(w))) { it.casual = true; it.formality = has('leather') || has('suede') ? 2.5 : 2; }
+    else if (['tweed', 'wool', 'tailored', 'linen', 'corduroy', 'velvet', 'seersucker'].some(has)) { it.formality = 3.5; delete it.unstructured; }
+  }
+  if (cat === 'shoes') {
+    if (has('suede')) it.suede = true;
+    if (has('dress') && !it.sub) it.formality = 4;
+    if (['hiking', 'combat'].some(has)) it.formality = 1.5;
+    if (['running', 'basketball', 'canvas'].some(has) && !it.sub) { it.sub = 'sneaker'; it.formality = 1.5; it.leather = 'none'; }
+    if (has('boat') && !it.sub) { it.sub = 'driver'; it.formality = 2; it.leather = 'none'; }
+    if (it.leather == null && color) it.leather = ['black', 'brown', 'dark-brown', 'cognac', 'tan'].includes(color) ? color : color === 'camel' ? 'tan' : color === 'burgundy' || color === 'oxblood' ? 'cognac' : 'none';
+  }
+  if (cat === 'belt') { if (color) it.leather = ['black', 'brown', 'dark-brown', 'cognac', 'tan'].includes(color) ? color : undefined; if (has('gold')) it.metal = 'gold'; else if (has('silver') || has('steel')) it.metal = 'silver'; }
+  if (cat === 'watch') it.metal = has('gold') ? 'gold' : 'silver';
+  if (cat === 'glasses') { const m = has('gold') ? 'gold' : has('silver') || has('steel') ? 'silver' : has('tortoise') || has('tortoiseshell') ? 'tortoise' : ''; if (m) it.metal = m; }
+  if (cat === 'socks' && has('noshow')) it.sub = 'no-show';
+  for (const k of Object.keys(it)) if (it[k] === undefined) delete it[k];
+  return it;
+}
+
 function scanPieces(s, items, out) {
   const idx = buildIndex(items);
   const known = (w) => idx.vocab.has(w) || w in NOUNS;
-  const raw = s.split(' ').filter((w) => w && (w.length > 1 || w === 'a' || w === 'i' || w === '|' || w === '§'));
+  let raw = s.split(' ').filter((w) => w && (w.length > 1 || w === 'a' || w === 'i' || w === '|' || w === '§'));
+  // a slip of the thumb ("brwon loafers", "jaket") is read as the word it is closest to
+  const sure = (w) => known(w) || DESC.has(w) || STYLE.has(w) || COLOR_SET.has(w) || STOP.has(w) || FILL.has(w) || NEG.has(w) || INTENT.has(w) || ADJ.has(w) || DAYPART.has(w) || idx.vocab.has(sing(w));
+  const lexicon = [...new Set([...idx.vocab, ...Object.keys(NOUNS), ...DESC, ...STYLE, ...COLOR_SET, ...STOP, ...INTENT, ...NEG])].filter((w) => w.length >= 3);
+  raw = raw.map((w) => {
+    if (w.length < 5 || !/^[a-z]+$/.test(w) || sure(w)) return w;
+    const max = w.length >= 8 ? 2 : 1;
+    let best = null, bd = max + 1, tie = false;
+    for (const c of lexicon) { const d = lev(w, c, max); if (d < bd) { best = c; bd = d; tie = false; } else if (d === bd && d <= max && c !== best) tie = true; }
+    return best && !tie ? best : w;
+  });
+  raw = canon(raw.join(' ')).split(' ');                             // a corrected word may complete a name ("bomber jaket")
   const toks = [];
   for (let i = 0; i < raw.length; i++) {                              // "day date" style names are one word in the closet
     const two = raw[i] + (raw[i + 1] || '');
     if (raw[i + 1] && /^[a-z0-9]+$/.test(two) && idx.vocab.has(two) && !(known(raw[i]) && known(raw[i + 1]))) { toks.push(two); i++; } else toks.push(raw[i]);
   }
-  const isW = (w) => w.length > 1 && !STOP.has(w) && /^[a-z0-9]+$/.test(w) && (known(w) || DESC.has(w) || idx.vocab.has(sing(w)));
+  const isW = (w) => w.length > 1 && !STOP.has(w) && /^[a-z0-9]+$/.test(w) && (known(w) || DESC.has(w) || STYLE.has(w) || idx.vocab.has(sing(w)));
   const negBefore = (i) => {
     for (let k = i - 1, hops = 0; k >= 0 && hops < 4; k--) {
       const w = toks[k];
@@ -194,6 +350,11 @@ function scanPieces(s, items, out) {
   const emit = (res, span, neg) => {
     const ids = res.rows.map((r) => r.it.id), slot = res.slot;
     const bare = span.length === 1 && span[0] in NOUNS;
+    if (slot === 'extra') {                                             // ties, scarves and the like ride along with the fit
+      if (neg) { ids.forEach((id) => { if (!out.noExtras.includes(id)) out.noExtras.push(id); }); out.extras = out.extras.filter((id) => !ids.includes(id)); }
+      else { out.noExtras = out.noExtras.filter((id) => !ids.includes(id)); if (!out.extras.some((id) => ids.includes(id))) out.extras.push(ids[0]); }
+      return;
+    }
     if (neg) {
       if (bare && ['jacket', 'blazer'].includes(span[0])) { out.locks.jacket = 'none'; delete out.allow.jacket; }
       else if (bare && span[0] === 'suit') out.mods.noSuit = true;
@@ -214,7 +375,33 @@ function scanPieces(s, items, out) {
       }
     }
   };
-  const missing = (span, neg, intent) => { if (!neg && intent) out.notes.push({ k: 'missing', t: `Not in the closet: ${span.join(' ')}.` }); };
+  // His own wording for a phrase the parser has normalised ("chinos" for "pants"), found again in what he typed.
+  const typed = clean(out.text.replace(/@/g, ' at ')).split(' ');
+  const saidFor = (words) => {
+    const want = words.join(' ');
+    for (let a = 0; a < typed.length; a++) for (let n = Math.min(words.length + 2, typed.length - a); n >= 1; n--) if (canon(typed.slice(a, a + n).join(' ')) === want) return typed.slice(a, a + n);
+    return words;
+  };
+  // A brand or model named right before the garment ("my Acme joggers"): words the closet has never seen.
+  const prefixOf = (i) => {
+    const words = [];
+    let k = i - 1;
+    for (; k >= 0 && words.length < 3; k--) {
+      const w = toks[k];
+      if (w === 'new' && ['balance', 'era'].includes(words[0])) { words.unshift(w); continue; }
+      if (!/^[a-z][a-z0-9]+$/.test(w) || sure(w)) break;
+      words.unshift(w);
+    }
+    return { words, vague: k >= 0 && ['a', 'an', 'some', 'any'].includes(toks[k]) };
+  };
+  const inWore = (i) => { const c = toks.slice(toks.lastIndexOf('|', i) + 1, i); return c.includes('wore') || c.includes('worn'); };
+  // Not in the closet, and he means to wear it: so he owns it.
+  const fresh = (span, head, pre, also) => {
+    const words = pre.concat(span);
+    const spec = pieceFrom(words, head, pre.concat(saidFor(span)), out.text);
+    if (also && also.said && !also.color && also.cat === spec.cat) { out.fresh.push({ update: also.id, item: spec }); return; }   // the colour of a piece added earlier without one
+    if (!out.fresh.some((f) => f.item.cat === spec.cat && f.item.name.toLowerCase() === spec.name.toLowerCase())) out.fresh.push({ item: spec });
+  };
 
   let lastNeg = false, lastEnd = -1;
   for (let i = 0; i < toks.length;) {
@@ -224,6 +411,8 @@ function scanPieces(s, items, out) {
     if (!neg && lastNeg && lastEnd >= 0 && toks.slice(lastEnd, i).every((w) => w === 'or' || w === 'nor' || FILL.has(w)) && toks.slice(lastEnd, i).some((w) => w === 'or' || w === 'nor')) neg = true;
     const first = neg || ((i === 0 || toks[i - 1] === '|' || toks[i - 1] === '§' || INTENT.has(toks[i - 1])) && toks[j] !== '§');
     const run = toks.slice(i, j);
+    const pre = prefixOf(i), told = inWore(i);
+    const branded = pre.words.length > 0 && !pre.vague;               // "my Acme joggers", not "a breathable shirt"
     let emitted = false;
     for (let a = 0; a < run.length;) {
       const intent = first || emitted;
@@ -231,19 +420,40 @@ function scanPieces(s, items, out) {
       let done = false;
       for (const e of ends) {
         const span = run.slice(a, e), res = resolve(span, idx, { neg, intent });
-        if (res) { emit(res, span, neg); emitted = true; a = e; done = true; break; }
+        if (!res) continue;
+        // a brand the closet has never seen in front of a garment it does have: a different piece of that kind
+        if (!neg && !told && a === 0 && branded && res.head && res.slot !== 'extra') fresh(span, res.head, pre.words);
+        else emit(res, span, neg);
+        emitted = true; a = e; done = true; break;
       }
       if (done) continue;
       const nounEnd = run.findIndex((w, k) => k >= a && w in NOUNS);
       if (nounEnd < 0) { a++; continue; }
       const span = run.slice(a, nounEnd + 1);                          // a garment was named but nothing matched all its words
+      const head = span[span.length - 1];
+      const after = toks[i + nounEnd + 1] || '';
+      if ((head === 'tie' && ['it', 'in', 'together', 'up', 'this', 'that', 'everything', 'things'].includes(after)) || (head === 'jersey' && toks[i + nounEnd - 1] === 'new')) { a = nounEnd + 1; continue; }   // "tie it together", "New Jersey"
+      const lean = span.filter((w) => !GENERIC_DESC.has(w) || w in NOUNS);
+      const plainer = lean.length < span.length ? resolve(lean, idx, { neg, intent }) : null;       // "black dress shoes" are his black shoes
+      if (plainer) { emit(plainer, lean, neg); emitted = true; a = nounEnd + 1; continue; }
       let hit = null, cut = 0;
       for (let k = 1; k < span.length && !hit; k++) { hit = resolve(span.slice(k), idx, { neg, intent }); cut = k; }
-      if (hit && !span.slice(0, cut).some((w) => COLOR_SET.has(w))) { emit(hit, span.slice(cut), neg); emitted = true; }
-      else missing(span, neg, true);
+      const lead = a === 0 && branded ? pre.words : [];
+      const own = hit ? span.slice(0, cut).some(specific) || lead.length > 0 : true;     // his words describe a piece nothing in the closet answers to
+      if (hit && (!own || neg)) { emit(hit, span.slice(cut), neg); emitted = true; }
+      else if (!neg && !told) { fresh(span, head, lead, hit && hit.rows.length === 1 ? hit.rows[0].it : null); emitted = true; }
       a = nounEnd + 1;
     }
     lastNeg = neg; lastEnd = j; i = j;
+  }
+  // "wear my acmes": something to wear that the parser cannot place. It asks what kind of piece it is.
+  for (let i = 0; i < toks.length; i++) {
+    if (!['wear', 'wearing', 'rock', 'rocking'].includes(toks[i])) continue;
+    let k = i + 1;
+    if (['my', 'the', 'these', 'those', 'some', 'a', 'an'].includes(toks[k])) k++;
+    const odd = [];
+    while (k < toks.length && odd.length < 3 && /^[a-z][a-z0-9]+$/.test(toks[k]) && !sure(toks[k])) odd.push(toks[k++]);
+    if (odd.length && !(k < toks.length && isW(toks[k])) && !inWore(i)) out.notes.push({ k: 'what', t: `I do not know what kind of piece “${odd.join(' ')}” is. Say it with the kind, like “my ${odd.join(' ')} sneakers”, and I add it to your closet.` });
   }
 }
 
@@ -342,7 +552,7 @@ export function windowFor(ask, date, now = new Date()) {
 // env: { today, date (used when no day is named), fixDate (ignore days named in the text), items, profile }
 export function parseAsk(text, env) {
   const today = env.today, profile = env.profile || {}, groups = profile.groups || [];
-  const out = { text: String(text || '').trim(), date: env.date || today, dateSaid: false, occ: null, occSaid: false, also: [], negKinds: [], mods: {}, locks: {}, allow: {}, exclude: [], notes: [], parts: [], clock: null, clockAp: '', lunch: false, venue: '', venueSoft: false, venueHome: false, venueOff: false, spot: '', wore: false };
+  const out = { text: String(text || '').trim(), date: env.date || today, dateSaid: false, occ: null, occSaid: false, also: [], negKinds: [], mods: {}, locks: {}, allow: {}, exclude: [], notes: [], parts: [], clock: null, clockAp: '', lunch: false, venue: '', venueSoft: false, venueHome: false, venueOff: false, spot: '', wore: false, fresh: [], extras: [], noExtras: [] };
   const full = canon(clean(out.text.replace(/@/g, ' at ')));
   // "I wore this last week", "same outfit as last time": the fit he is looking at has been worn and should change
   out.wore = /\b(?:wore|worn)\b[^|]*\b(?:this|that|it|same)\b|\bsame (?:outfit|fit|look|thing|one)\b/.test(full);

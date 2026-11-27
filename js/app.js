@@ -4,10 +4,10 @@ import * as E from './engine.js';
 import * as M from './mockup.js';
 import { figureSvg } from './figure.js';
 import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
-import { parseAsk, windowFor } from './ask.js';
+import { parseAsk, windowFor, colourSaid } from './ask.js';
 import * as L from './link.js';
 
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -45,7 +45,7 @@ const blankAsk = (date, occ, extra) => Object.assign({ text: '', date, dateSaid:
 // What the answer asks of the engine, with any piece swapped by hand on top.
 function brief() {
   const a = ui.ask || {};
-  return { locks: Object.assign({}, a.locks || {}, ui.locks), allow: a.allow || {}, exclude: a.exclude || [], mods: Object.assign({}, a.mods || {}, { also: a.also || [], unlike: a.worn || [] }) };
+  return { locks: Object.assign({}, a.locks || {}, ui.locks), allow: a.allow || {}, exclude: a.exclude || [], extras: a.extras || [], mods: Object.assign({}, a.mods || {}, { also: a.also || [], unlike: a.worn || [] }) };
 }
 // Does a fit already in the log satisfy what was just asked for?
 function fitsAsk(o, a) {
@@ -55,16 +55,18 @@ function fitsAsk(o, a) {
   const have = (slot) => (slot === 'jacket' ? (o.suit || o.jacket || 'none') : slot === 'tuck' ? o.tuck : (o[slot] || 'none'));
   for (const [k, v] of Object.entries(a.locks || {})) if (have(k) !== v) return false;
   for (const [k, v] of Object.entries(a.allow || {})) if (!v.includes(have(k))) return false;
+  if ((a.extras || []).some((id) => !(o.extras || []).includes(id)) || (a.noExtras || []).some((id) => (o.extras || []).includes(id))) return false;
   return !(a.exclude || []).some((id) => E.majorIds(o).includes(id));
 }
 function entryFor(date, occ) { return st().wears.find((w) => w.date === date && w.occ === occ) || null; }
 function outfitFromEntry(w) {
   const o = { occ: w.occ, date: w.date, suit: null, jacket: 'none', top: null, bottom: null, belt: 'none', shoes: null, socks: null, watch: null, glasses: null, coat: null, hat: null, tuck: w.tuck || null,
-    also: w.also || [], shift: w.shift || 0, easy: !!w.easy, lab: !!w.lab || /lab coat/i.test(w.note || '') };
+    also: w.also || [], shift: w.shift || 0, easy: !!w.easy, lab: !!w.lab || /lab coat/i.test(w.note || ''), extras: [] };
   for (const id of w.items || []) {
     const it = item(id); if (!it) continue;
     if (it.cat === 'suit') { if (!o.suit && !(w.items || []).some((x) => { const b = item(x); return b && b.cat === 'bottom'; })) { o.suit = id; o.jacket = id; o.bottom = id; } else { o.jacket = id; } }
     else if (it.cat === 'jacket') o.jacket = id;
+    else if (it.cat === 'extra') o.extras.push(id);
     else if (['top', 'bottom', 'belt', 'shoes', 'socks', 'watch', 'glasses', 'coat', 'hat'].includes(it.cat)) o[it.cat] = id;
   }
   if (!o.tuck) {
@@ -90,14 +92,19 @@ function recompute(prefer) {
   if (!st().items.length || !ui.occ) { ui.results = []; ui.idx = 0; return; }
   const c = ctx(), b = brief(), a = ui.ask || {}, m = a.mods || {};
   let r = E.solve(c, Object.assign({}, b, { prefer: prefer || null, n: 8 }));
-  const asked = Object.keys(a.locks || {}).length || Object.keys(a.allow || {}).length || (a.exclude || []).length || m.wantSuit || m.noSuit || m.noDenim || m.theme;
+  const asked = Object.keys(b.locks || {}).length || Object.keys(a.allow || {}).length || (a.exclude || []).length || m.wantSuit || m.noSuit || m.noDenim || m.theme;
   if (!r.length && asked) {
     // nothing clears the rules with every piece that was named: keep the ones named outright, then ease those too, and say so
-    r = E.solve(c, { locks: b.locks, mods: { also: a.also || [], shift: m.shift, lab: m.lab }, prefer: prefer || null, n: 8 });
+    r = E.solve(c, { locks: b.locks, extras: b.extras, mods: { also: a.also || [], shift: m.shift, lab: m.lab }, prefer: prefer || null, n: 8 });
     if (r.length) ui.relaxed = 'Not everything you asked for works together under your rules. This keeps the pieces you named outright.';
     else {
-      r = E.solve(c, { locks: ui.locks, mods: { also: a.also || [], shift: m.shift }, prefer: prefer || null, n: 8 });
-      if (r.length) ui.relaxed = 'The pieces you named do not clear your rules together, so this fit leaves them out.';
+      // a piece named outright is always worn: where the rules cannot be met with it, it goes in anyway and the check list says where
+      r = E.solve(c, { locks: b.locks, extras: b.extras, mods: { also: a.also || [], shift: m.shift, lab: m.lab }, prefer: prefer || null, n: 8, force: true });
+      if (r.length) ui.relaxed = 'The pieces you named bend your rules together. They are in because you asked. The check list shows where.';
+      else {
+        r = E.solve(c, { locks: ui.locks, extras: b.extras, mods: { also: a.also || [], shift: m.shift }, prefer: prefer || null, n: 8 });
+        if (r.length) ui.relaxed = 'No fit can be built around the pieces you named, so this one leaves them out.';
+      }
     }
   }
   ui.results = r; ui.idx = 0;
@@ -109,8 +116,9 @@ function reaudit() {
 }
 // Never hand over a fit on an old forecast: fetch a fresh one first when a connection is there.
 async function present(prefer, then) {
-  if (ui.date >= today() && (!ui.forecast || !ui.forecast.at || Date.now() - ui.forecast.at > FRESH_MS)) {
+  if (ui.date >= today() && (!ui.forecast || !ui.forecast.at || Date.now() - ui.forecast.at > FRESH_MS) && Date.now() - (ui.wxTried || 0) > 120000) {
     ui.loading = 'Checking the weather'; render();
+    ui.wxTried = Date.now();                                        // a service that does not answer is not asked again on every change
     ui.forecast = await loadForecast(st().profile, true);
   }
   ui.loading = ''; recompute(prefer);
@@ -140,6 +148,7 @@ function respond(before, latest) {
     if (named.length) out.push(`In, as you asked: ${E.listAnd(named)}.`);
     for (const [k, v] of Object.entries(q.locks || {})) if (v === 'none' && !(k === 'jacket' && m.lab)) out.push(`No ${SL[k] || k}.`);
     if (q.locks && q.locks.tuck) out.push(q.locks.tuck === 'tucked' ? 'Shirt tucked.' : 'Shirt untucked.');
+    for (const id of q.noExtras || []) if (item(id)) out.push(`No ${nm(id)}.`);
     const gone = new Set((p.exclude || []).concat(p.avoid || []));
     for (const [k, ids] of Object.entries(q.allow || {})) {
       if (m.wantSuit && k === 'jacket') continue;
@@ -165,18 +174,35 @@ function respond(before, latest) {
     const slots = [['hat', (o) => o.hat || null], ['coat', (o) => o.coat || null], ['jacket', (o) => o.suit || (o.jacket !== 'none' ? o.jacket : null)], ['top', (o) => o.top], ['bottom', (o) => (o.suit ? null : o.bottom)], ['shoes', (o) => o.shoes]];
     const ch = slots.map(([k, f]) => ({ k, was: f(before), now: f(after) })).filter((x) => x.was !== x.now);
     fresh = ch.map((x) => x.now).filter(Boolean);
-    if (!ch.length) diff = latest && (latest.notes || []).some((n) => n.k === 'missing') ? 'Nothing changed.' : 'Nothing changed: this fit already meets that.';
+    const sameExtras = (before.extras || []).slice().sort().join('+') === (after.extras || []).slice().sort().join('+');
+    if (!ch.length) diff = !sameExtras ? '' : latest && (latest.notes || []).some((n) => n.k === 'missing') ? 'Nothing changed.' : 'Nothing changed: this fit already meets that.';
     else if (ch.length === 1) diff = ch[0].now ? `${up(SL[ch[0].k])}: ${nm(ch[0].now)}${ch[0].was ? ' in place of the ' + nm(ch[0].was) : ''}.` : `No ${SL[ch[0].k]} now.`;
     else diff = `New in this fit: ${E.listAnd(ch.filter((x) => x.now).map((x) => nm(x.now)))}.`;
   }
+  // pieces he named that the closet did not list: taken as his, added, and worn
+  const adopted = (q) => {
+    const ids = (q.made || []).filter((id) => item(id));
+    if (!ids.length) return [];
+    const worn = after ? E.majorIds(after) : [];
+    const lines = [`Not in your closet list, so I took ${ids.length > 1 ? 'them' : 'it'} as yours and added ${ids.length > 1 ? 'them' : 'it'}: ${few(ids)}.${ids.every((id) => worn.includes(id)) ? (ids.length > 1 ? ' They are in this fit.' : ' It is in this fit.') : ''}`];
+    const blank = ids.map(item).filter((it) => !it.color && it.cat !== 'extra' && it.cat !== 'watch');
+    if (blank.length) lines.push(`Tell me the colour of the ${E.listAnd(blank.map((it) => it.short || it.name))}, like \u201c${blank[0].cat === 'shoes' ? 'brown' : 'navy'} ${(blank[0].short || blank[0].name).toLowerCase()}\u201d, for a truer mockup.`);
+    return lines;
+  };
+  const painted = (q) => ((q.told || []).filter((id) => item(id)).length ? [`Noted: ${few((q.told || []).filter((id) => item(id)))}. The mockup is redone to show it.`] : []);
+  const carried = (q, skip = []) => { const ids = (q.extras || []).filter((id) => item(id) && !skip.includes(id)); return ids.length ? [`With the ${E.listAnd(ids.map(nm))}, as you asked.`] : []; };
   const out = [];
   if (latest) {                                                   // a follow up: answer the new message first, then say what still holds
     const undone = !!p.undo;
     if (p.undo) { out.push(`Took back \u201c${p.undo}\u201d.`); delete p.undo; }
-    for (const n of latest.notes || []) if (n.k === 'missing') out.push(n.t);
+    for (const n of latest.notes || []) if (n.k === 'missing' || n.k === 'what') out.push(n.t);
+    const mine = adopted(latest).concat(painted(latest));
+    out.push(...mine);
+    if (mine.length && /^Nothing changed/.test(diff)) diff = '';
     const movedTo = latest.venue && !latest.wore && p.venue && !p.venueOff && !p.venueSoft ? p.venue : '';     // this message named a new place
     if (diff && !(movedTo && /^Nothing changed/.test(diff))) out.push(undone && /^Nothing changed/.test(diff) ? 'The fit stays as it is.' : diff);
-    out.push(...tell(latest, fresh));
+    out.push(...tell(latest, fresh.concat(latest.made || [])));
+    out.push(...carried(latest, latest.made || []));
     if (latest.wore && before) out.push('Noted that you already wore that one, so its pieces stay out.');
     if (movedTo) out.push(`Moved to ${movedTo}.${staged() ? ' The mockup is staged there.' : ''}`);
     if (ui.relaxed && !c.logged) out.push(ui.relaxed);
@@ -187,7 +213,9 @@ function respond(before, latest) {
   if (p.text) out.push(up(plan));
   if (staged()) out.push('The mockup is staged there.');
   for (const n of p.notes || []) if (n.k !== 'avoid') out.push(n.t);
-  out.push(...tell(p));
+  out.push(...adopted(p), ...painted(p));
+  out.push(...tell(p, p.made || []));
+  out.push(...carried(p, p.made || []));
   const worn = p.worn || [];
   const swapped = (p.avoid || []).filter((id) => !worn.includes(id));
   if (worn.length) out.push(`Already worn, so out: ${few(worn)}. Kept clear of their colours too.`);
@@ -198,9 +226,37 @@ function respond(before, latest) {
 }
 const dropDiff = () => { if (ui.ask) ui.ask.diff = ''; };
 const PLACE_KEYS = ['venue', 'venueSoft', 'venueHome', 'venueOff', 'spot'];
+// The closet is not his whole wardrobe. A piece he names that it does not list is his all the same: it is added to the closet,
+// described from his words, and goes into the fit. It stays "manual only" (worn when he names it) until he says the stylist may pick it.
+function adopt(p) {
+  const made = [];
+  for (const f of p.fresh || []) {
+    const spec = f.item;
+    let it = f.update ? item(f.update) : null;
+    if (it) {                                                       // the colour of a piece added earlier without one
+      for (const k of ['color', 'hex', 'tone', 'pattern', 'leather']) if (spec[k] != null && it[k] == null) it[k] = spec[k];
+      it.name = spec.name; it.short = spec.short;
+      staleMocks(it.id);
+      p.told = (p.told || []).concat(it.id);
+    } else {
+      it = st().items.find((i) => i.said && i.cat === spec.cat && i.status !== 'retired' && i.name.toLowerCase() === spec.name.toLowerCase());
+      if (!it) { it = Object.assign({ id: S.uid(spec.cat), status: 'active', notes: '', said: true, hold: true, added: today() }, spec); st().items.push(it); made.push(it.id); }
+    }
+    if (it.cat === 'extra') { if (!p.extras.includes(it.id)) p.extras.push(it.id); continue; }
+    const slot = it.cat === 'suit' ? 'jacket' : it.cat;
+    p.locks[slot] = it.id; delete p.allow[slot];
+    if (it.cat === 'suit') p.mods.wantSuit = true;
+    p.exclude = p.exclude.filter((id) => id !== it.id);
+  }
+  if ((p.fresh || []).length) S.save();
+  p.made = (p.made || []).concat(made);
+  p.fresh = [];
+  return p;
+}
 // The answer to the opening question becomes the brief for the fit.
 async function answer(text, over = {}) {
-  const p = parseAsk(text, { today: today(), date: over.date || null, fixDate: !!over.fixDate, items: st().items, profile: st().profile, now: new Date() });
+  const p = adopt(parseAsk(text, { today: today(), date: over.date || null, fixDate: !!over.fixDate, items: st().items, profile: st().profile, now: new Date() }));
+  if (over.made) p.made = [...new Set((p.made || []).concat(over.made))];
   if (over.occ && (over.forceOcc || !p.occSaid)) {
     p.occ = over.occ; p.occSaid = true; p.pinned = true;
     if (over.forceOcc) p.also = (over.also || []).filter((k) => k !== over.occ);
@@ -295,13 +351,24 @@ function mockKey(o) { const p = placeOf(); return E.signature(o) + (p && p.tag ?
 // The stored mockup for the fit on screen, with the name it is stored under.
 function mockEntry(o) {
   const all = st().mockups || {}, p = placeOf(), sig = E.signature(o), key = mockKey(o);
-  if (all[key]) return [key, all[key]];
+  if (all[key] && !all[key].stale) return [key, all[key]];
   if (p && p.tag) return null;                                     // a place was named: only a picture set there will do
   let best = null;                                                 // no place named (a fit opened from the log, say): any picture of this fit, newest first
-  for (const k of Object.keys(all)) if (k.startsWith(sig + '@') && (!best || (all[k].at || 0) > (best[1].at || 0))) best = [k, all[k]];
+  for (const k of Object.keys(all)) if (k.startsWith(sig + '@') && !all[k].stale && (!best || (all[k].at || 0) > (best[1].at || 0))) best = [k, all[k]];
   return best;
 }
 function mockFor(o) { const e = mockEntry(o); return e ? e[1] : null; }
+// A piece was described anew (its colour was given, say): pictures that show it are out of date. They stay as the
+// placeholder, and the one on screen becomes the photograph the new picture is edited from.
+function staleMocks(id) {
+  const all = st().mockups || {};
+  const cur = ui.mode === 'fit' ? current().o : null, curKey = cur ? mockKey(cur) : null;
+  for (const [k, m] of Object.entries(all)) {
+    if (!k.split(/[|+@]/).includes(id) || m.stale) continue;
+    m.stale = true;
+    if (k === curKey) ui.prevMock = { blob: m.blob, bh: m.bh || null };
+  }
+}
 // Any picture of this fit, wherever it was set: shown dimmed while the one for this place is made.
 function anyMock(o) {
   const all = st().mockups || {}, sig = E.signature(o);
@@ -511,7 +578,7 @@ function viewAsk() {
       <h1>What is the fit for?</h1>
       <textarea id="askBox" class="askbox" rows="3" data-in="askText" data-enter="askGo" enterkeyhint="go" placeholder="Dinner at Marios tonight, then drinks" autocomplete="off">${esc(ui.draft)}</textarea>
       <button class="btn primary" data-act="askGo">Get my fit</button>
-      <p class="fine">Say where and when, and anything you want in it. Name the place and the mockup is staged there. Monday class with the fedora. No jeans. More casual.</p>
+      <p class="fine">Say where and when, and anything you want in it. Name the place and the mockup is staged there. Name a piece the closet does not list and it is taken as yours. Monday class with the fedora. No jeans.</p>
     </section>
     <section class="sec"><h3>Or tap one</h3>
       <div class="seg" role="group" aria-label="Day">${quick.map(([d, l]) => `<button class="${d === when ? 'on' : ''}" data-act="askWhen" data-date="${d}">${l}</button>`).join('')}
@@ -553,6 +620,7 @@ function rowHtml(r, logged) {
   const locked = !logged && ui.locks[r.slot] != null;
   const name = r.item ? esc(r.item.name) : (r.slot === 'jacket' ? 'No jacket' : 'None');
   const note = r.note && (r.item || r.slot !== 'jacket') ? `<small>${esc(r.note)}</small>` : '';
+  if (r.slot === 'extra') return `<button class="row" data-act="item" data-id="${esc(r.item.id)}">${swatch(r.item)}<span class="rt"><span class="rl">${esc(lab)}</span><span class="rn">${name}${note}</span></span><span class="chev" aria-hidden="true"></span></button>`;
   return `<button class="row" ${logged ? 'disabled' : `data-act="swap" data-slot="${r.slot}"`}>
     ${swatch(r.item)}<span class="rt"><span class="rl">${esc(lab)}${locked ? ' · locked' : ''}</span><span class="rn">${name}${note}</span></span>${logged ? '' : '<span class="chev" aria-hidden="true"></span>'}</button>`;
 }
@@ -670,7 +738,7 @@ function viewCloset() {
 }
 function tile(i) {
   const lw = lastWorn(i.id);
-  const tag = i.status === 'retired' ? 'out' : i.hold ? 'manual only' : '';
+  const tag = i.status === 'retired' ? 'out' : i.said ? 'from your words' : i.hold ? 'manual only' : '';
   return `<button class="tile${i.status === 'retired' ? ' off' : ''}" data-act="item" data-id="${esc(i.id)}">${swatch(i, true)}<span class="tn">${esc(i.name)}</span><span class="tm">${tag ? esc(tag) : (lw ? 'worn ' + E.shortDate(lw) : '')}</span></button>`;
 }
 
@@ -767,6 +835,10 @@ function sheetItem(s) {
     ${i.notes ? `<p class="note">${esc(i.notes)}</p>` : ''}
     <div class="seen">${seen.map((x) => `<div><b>${esc(x.g.name)}</b><span>${x.dates.length ? 'saw it ' + x.dates.map(E.shortDate).join(', ') : 'has not seen it'}</span></div>`).join('')}
       <div><b>All wears</b><span>${all.length ? all.length + ', last ' + E.shortDate(all[all.length - 1]) : 'none logged'}</span></div></div>
+    ${i.said ? `<p class="fine">Added from your words${i.added ? ' on ' + esc(E.shortDate(i.added)) : ''}. The details below are my best reading. Correct them here. It is worn when you name it, until you turn on Stylist may pick it.</p>
+    <label class="field"><span>Name</span><input type="text" data-in="itemName" data-id="${esc(i.id)}" value="${esc(i.name)}" autocomplete="off"></label>
+    <label class="field"><span>Color</span><select data-in="itemColor" data-id="${esc(i.id)}"><option value="">Not set</option>${Object.entries(E.COLORS).filter(([k]) => !['gold', 'silver', 'tortoise'].includes(k)).map(([k, v]) => `<option value="${k}"${i.color === k ? ' selected' : ''}>${esc(v.label)}</option>`).join('')}${i.color && !E.COLORS[i.color] ? `<option value="${esc(i.color)}" selected>${esc(i.color)}</option>` : ''}</select></label>
+    ${i.cat !== 'extra' ? `<label class="field"><span>How dressy</span><select data-in="itemFormality" data-id="${esc(i.id)}">${[[1, '1, very casual'], [2, '2, casual'], [3, '3, smart casual'], [4, '4, business'], [5, '5, formal']].map(([v, l]) => `<option value="${v}"${Math.round(i.formality || 3) === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>` : ''}` : ''}
     <label class="field"><span>Notes</span><textarea data-in="itemNotes" data-id="${esc(i.id)}" rows="2">${esc(i.notes || '')}</textarea></label>
     <label class="toggle"><input type="checkbox" data-in="itemActive" data-id="${esc(i.id)}"${i.status !== 'retired' ? ' checked' : ''}><span>In rotation</span></label>
     <label class="toggle"><input type="checkbox" data-in="itemAuto" data-id="${esc(i.id)}"${!i.hold ? ' checked' : ''}><span>Stylist may pick it</span></label>
@@ -815,7 +887,7 @@ function sheetPaste() {
 }
 function sheetAdd() {
   const colors = Object.entries(E.COLORS).filter(([k]) => !['gold', 'silver', 'tortoise'].includes(k));
-  return `<h2>Add a piece</h2><p class="fine">Only add what you own and have confirmed.</p>
+  return `<h2>Add a piece</h2><p class="fine">Add what you own. You can also just name a piece when you ask for a fit, and it is added for you.</p>
     <label class="field"><span>Type</span><select id="addCat">${E.CATS.map((c) => `<option value="${c.id}">${esc(c.label)}</option>`).join('')}</select></label>
     <label class="field"><span>Name</span><input id="addName" type="text" placeholder="Navy knit polo" autocomplete="off"></label>
     <label class="field"><span>Color</span><select id="addColor">${colors.map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('')}</select></label>
@@ -843,7 +915,24 @@ const A = {
     if (!v || !ui.ask) return null;
     ui.refineDraft = '';
     const a = ui.ask;
-    const probe = parseAsk(v, { today: today(), date: ui.date, items: st().items, profile: st().profile });
+    // just a colour ("red", "they are brown"): it belongs to the piece in this fit that was added without one
+    const cur = current().o;
+    const blank = cur ? E.majorIds(cur).map(item).filter((it) => it && it.said && !it.color && it.cat !== 'extra' && it.cat !== 'watch') : [];
+    if (blank.length) {
+      const c = colourSaid(v, blank.map((it) => it.name));
+      const low = v.toLowerCase();
+      const it = c ? (blank.length === 1 ? blank[0] : blank.find((x) => low.includes((x.short || x.name).toLowerCase().split(' ').pop())) || null) : null;
+      if (it) {
+        it.color = c.color; if (c.hex) { it.hex = c.hex; it.tone = c.tone; }
+        if (it.cat === 'shoes' && it.leather == null) it.leather = ['black', 'brown', 'dark-brown', 'cognac', 'tan'].includes(c.color) ? c.color : 'none';
+        const tail = /[A-Z]/.test(it.name.slice(1)) ? it.name : it.name[0].toLowerCase() + it.name.slice(1);
+        it.name = c.word[0].toUpperCase() + c.word.slice(1) + ' ' + tail; it.short = /[A-Z]/.test(it.name.slice(1)) ? it.name : it.name.toLowerCase();
+        staleMocks(it.id); S.save(); reaudit();
+        a.reply = [`Noted: ${it.short}. The mockup is redone to show it.`]; a.diff = '';
+        render(); return null;
+      }
+    }
+    const probe = adopt(parseAsk(v, { today: today(), date: ui.date, items: st().items, profile: st().profile }));   // a piece named here that the closet lacks is added before the fit is rebuilt
     // "change it" or "different shoes" keeps what is on screen out of the next fit, unless this very message asks for that piece by name
     const named = new Set(Object.values(probe.locks).concat(...Object.values(probe.allow).filter((ids) => ids.length <= 2)));
     const now = current().o;
@@ -855,7 +944,7 @@ const A = {
     keepMock();
     const touched = new Set(av.slots.concat(Object.keys(probe.locks), Object.keys(probe.allow)));
     for (const k of Object.keys(ui.locks)) if (av.whole || probe.wore || touched.has(k) || avoid.includes(ui.locks[k])) delete ui.locks[k];
-    if (probe.occSaid) return answer(v, { date: ui.date, editing: true, avoid, worn, prefer, before: now });    // a new occasion is a new question, same day unless a day is named
+    if (probe.occSaid) return answer(v, { date: ui.date, editing: true, avoid, worn, prefer, before: now, made: probe.made });    // a new occasion is a new question, same day unless a day is named
     const place = probe.venue && !probe.wore ? { venue: probe.venue, venueSoft: !!probe.venueSoft, venueHome: !!probe.venueHome, venueOff: false, spot: probe.venueHome ? 'home' : (a.venueHome ? '' : a.spot || '') } : null;
     const steps = (a.steps || []).concat([Object.assign({ t: v, avoid: avoid.filter((id) => !(a.avoid || []).includes(id)), worn: worn.filter((id) => !(a.worn || []).includes(id)) }, place ? { place } : {})]);
     const first = a.first != null ? a.first : a.text;
@@ -935,7 +1024,7 @@ const A = {
   cancelEdit: () => { ui.editing = false; ui.locks = {}; render(); },
   removeEntry: () => openSheet({ type: 'confirm', title: 'Remove this day from the log?', text: 'The stylist will stop counting these pieces as seen that day.', yes: 'Remove', run: () => { st().wears = st().wears.filter((w) => !(w.date === ui.date && w.occ === ui.occ)); S.save(); recompute(); } }),
   confirmYes: async () => { const s = ui.sheet; closeSheet(); if (s && s.run) await s.run(); render(); },
-  closeSheet: () => { if (!ui.busy) closeSheet(); },
+  closeSheet: () => { if (ui.busy) return; const was = ui.sheet; closeSheet(); if (was && was.type === 'item' && ui.tab === 'fit') render(); },
   logFilter: (d) => { ui.logFilter = d.f; render(); },
   openLog: (d) => openSheet({ type: 'log', id: d.id }),
   toggleWorn: (d) => { const w = st().wears.find((x) => x.id === d.id); if (w) { w.status = w.status === 'planned' ? 'worn' : 'planned'; S.save(); render(); openSheet({ type: 'log', id: d.id }); } },
@@ -1105,6 +1194,9 @@ const IN = {
   model: (el) => { st().settings.model = el.value; S.save(); },
   scene: (el) => { st().settings.setting = el.value; S.save(); renderSheet(); hydrateImages($('#sheet')); },
   itemNotes: (el) => { const i = item(el.dataset.id); if (i) { i.notes = el.value; S.save(); } },
+  itemName: (el) => { const i = item(el.dataset.id); const v = el.value.trim(); if (i && v) { i.name = v; i.short = /[A-Z]/.test(v.slice(1)) ? v : v.toLowerCase(); staleMocks(i.id); S.save(); } },
+  itemColor: (el) => { const i = item(el.dataset.id); if (!i) return; if (el.value) i.color = el.value; else delete i.color; if (E.COLORS[i.color] || !i.color) { delete i.hex; delete i.tone; } if (i.cat === 'shoes' && i.leather !== 'none') i.leather = ['black', 'brown', 'dark-brown', 'cognac', 'tan'].includes(i.color) ? i.color : i.leather; staleMocks(i.id); S.save(); if (ui.mode === 'fit') reaudit(); },
+  itemFormality: (el) => { const i = item(el.dataset.id); if (i) { i.formality = Number(el.value); S.save(); if (ui.mode === 'fit') reaudit(); } },
   itemActive: (el) => { const i = item(el.dataset.id); if (i) { i.status = el.checked ? 'active' : 'retired'; S.save(); recompute(); } },
   itemAuto: (el) => { const i = item(el.dataset.id); if (i) { i.hold = !el.checked; S.save(); recompute(); } },
   itemTeach: (el) => { const i = item(el.dataset.id); if (i) { i.noTeach = !el.checked; S.save(); recompute(); } },

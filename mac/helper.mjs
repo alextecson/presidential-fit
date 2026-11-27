@@ -2,11 +2,12 @@
 // Presidential Fit helper for the wearer's own Mac.
 // It waits for sealed requests from the phone, makes each mockup with the image tool that ships inside the ChatGPT
 // desktop app (so it runs on the wearer's ChatGPT plan, with no API key), and sends the sealed picture back.
+// It also checks a photograph the wearer takes of the finished look, or of one piece he is trying on, against the plan.
 //
 // Private files stay outside this repository, in ~/Library/Application Support/PresidentialFit:
 //   profile.json   the profile block of the closet file. It is what pairs this Mac with the phone.
 //   me.jpg         the reference photo of the wearer. It never leaves the Mac except to ChatGPT.
-//   config.json    optional overrides: { "profile": "...", "photo": "...", "codex": "...", "maxPerDay": 60 }
+//   config.json    optional overrides: { "profile": "...", "photo": "...", "codex": "...", "maxPerDay": 60, "maxChecksPerDay": 80 }
 //   cache/         finished mockups, each with a small note of the fit and setting it shows
 //   places.json    what the places he named look like, looked up once each
 import fs from 'node:fs';
@@ -17,7 +18,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const lib = fs.existsSync(path.join(here, 'link.js')) ? here : path.join(here, '..', 'js');
-const { RELAY, derive, seal, open, newPair, sessionKey, sealBytes, tidy, briefHash } = await import(pathToFileURL(path.join(lib, 'link.js')).href);
+const { RELAY, derive, seal, open, newPair, sessionKey, sealBytes, openBytes, tidy, briefHash } = await import(pathToFileURL(path.join(lib, 'link.js')).href);
+const { checkTask, parseCheck } = await import(pathToFileURL(path.join(lib, 'check.js')).href);
 const { promptFrom, editPromptFrom, diffLines, WHENS } = await import(pathToFileURL(path.join(lib, 'mockup.js')).href);
 
 const HOME = process.env.PF_HOME || path.join(os.homedir(), 'Library', 'Application Support', 'PresidentialFit');
@@ -105,12 +107,15 @@ let working = false;
 let current = null;                                                // the job being made, with its child process
 function cancel(id) {
   const i = queue.findIndex((j) => j.id === id);
+  pending.delete(id);
   if (i >= 0) { queue.splice(i, 1); finish(id); log('request', id, 'cancelled before it started'); return; }
   if (current && current.id === id) { current.cancelled = true; if (current.child) current.child.kill('SIGKILL'); log('request', id, 'cancelled while being made'); }
 }
 async function onMessage(m) {
   const raw = await open(link.key, m.message);
   if (raw && raw.v === 1 && typeof raw.cancel === 'string' && typeof raw.t === 'number' && Math.abs(Date.now() - raw.t) < 10 * 60 * 1000) { cancel(raw.cancel); return; }
+  if (raw && raw.v === 1 && raw.kind === 'check') { await onCheck(raw); return; }
+  if (raw && raw.v === 1 && raw.part === 'photo') { await onPhoto(raw, m); return; }
   const req = checkRequest(raw);
   if (!req || taken.has(req.id)) return;
   const was = seen.get(req.id);
@@ -139,7 +144,7 @@ async function pump() {
     catch (e) {
       if (!job.cancelled) {                                           // cancelled means the phone moved on: nothing to report
         log('job', job.id, 'failed:', e.message);
-        try { await say({ id: job.id, st: 'error', msg: e instanceof UserError ? e.message : 'Your Mac could not make the mockup. Try again.' }); } catch (e2) { /* phone will time out */ }
+        try { await say({ id: job.id, st: 'error', msg: e instanceof UserError ? e.message : job.kind === 'check' ? 'Your Mac could not check the photo. Try again.' : 'Your Mac could not make the mockup. Try again.' }); } catch (e2) { /* phone will time out */ }
       }
     }
     finish(job.id);
@@ -163,6 +168,7 @@ function editBase(job) {
   return d.changed.length + d.gone.length ? base : null;
 }
 async function handle(job) {
+  if (job.kind === 'check') return handleCheck(job);
   const hash = await briefHash(job.lines, job.scene);
   const cached = path.join(CACHE, hash + '.jpg'), noteFile = path.join(CACHE, hash + '.json');
   const hit = fs.existsSync(cached) && !job.fresh;
@@ -196,6 +202,74 @@ async function handle(job) {
   log('job', job.id, hit ? 'sent from cache' : note.how === 'edit' ? 'edited and sent' : 'made and sent', Math.round(jpg.length / 1024) + ' KB');
 }
 
+// ---------- the photo check ----------
+// The phone asks first and sends the photograph second, sealed with a key made for that one check. The photograph is
+// written to a job folder for ChatGPT to look at and removed as soon as the answer is read. It is never kept.
+const pending = new Map();                                         // checks waiting for their photograph
+async function onCheck(r) {
+  if (!/^[0-9a-f]{16}$/.test(r.id || '') || typeof r.t !== 'number' || Math.abs(Date.now() - r.t) > 10 * 60 * 1000 || typeof r.pub !== 'string' || r.pub.length > 200) return;
+  if (!Array.isArray(r.lines) || r.lines.length < 1 || r.lines.length > 14) return;
+  const lines = r.lines.map((l) => tidy(l, 240));
+  if (!lines.every((l) => /^[A-Z][A-Z ]{1,14}: \S/.test(l))) return;
+  if (taken.has(r.id) || seen.has(r.id)) return;
+  taken.add(r.id); seen.set(r.id, { t: Date.now(), done: true, tries: 1 }); saveSeen();      // never taken up again after a restart: its photograph would have to be sent again
+  for (const [k, p] of pending) if (Date.now() - p.at > 5 * 60 * 1000) pending.delete(k);
+  if (pending.size >= 4) { try { await say({ id: r.id, st: 'error', msg: 'Your Mac is busy. Try again in a minute.' }); } catch (e) { /* phone will time out */ } return; }
+  const pair = await newPair();
+  pending.set(r.id, { at: Date.now(), key: await sessionKey(pair.priv, r.pub, r.id), job: { id: r.id, kind: 'check', mode: r.mode === 'piece' ? 'piece' : 'look', occasion: tidy(r.occasion, 40), lines } });
+  stayAwake();
+  log('check', r.id, 'asked for,', lines.length, 'lines, waiting for the photo');
+  say({ id: r.id, st: 'ready', pub: pair.pub }).catch((e) => log('ack failed:', e.message));
+}
+async function onPhoto(r, m) {
+  const p = pending.get(r.id);
+  if (!p || !m.attachment || !m.attachment.url || typeof r.t !== 'number' || Math.abs(Date.now() - r.t) > 10 * 60 * 1000) return;
+  pending.delete(r.id);
+  try {
+    const url = String(m.attachment.url);
+    if (!url.startsWith(RELAY + '/file/')) throw new UserError('The photo did not arrive. Try again.');
+    if ((m.attachment.size || 0) > 6e6) throw new UserError('That photo is too large.');
+    const res = await fetch(url);
+    if (!res.ok) throw new UserError('The photo did not arrive. Try again.');
+    const plain = await openBytes(p.key, await res.arrayBuffer());
+    const bytes = plain ? Buffer.from(plain) : null;
+    if (!bytes || bytes.length < 2000 || !(bytes[0] === 0xff && bytes[1] === 0xd8)) throw new UserError('The photo arrived damaged. Try again.');     // a JPEG, and nothing else
+    if (queue.length >= 3) throw new UserError('Your Mac is busy with other work. Try again in a minute.');
+    const job = Object.assign(p.job, { photo: bytes, key: p.key });
+    const ahead = queue.length + (working ? 1 : 0);
+    queue.push(job);
+    log('check', job.id, 'photo received,', Math.round(bytes.length / 1024) + ' KB' + (ahead ? ', ' + ahead + ' ahead of it' : ''));
+    say({ id: job.id, st: 'working', ahead }).catch(() => {});
+    pump();
+  } catch (e) {
+    log('check', r.id, 'failed:', e.message);
+    try { await say({ id: r.id, st: 'error', msg: e instanceof UserError ? e.message : 'Your Mac could not read the photo. Try again.' }); } catch (e2) { /* phone will time out */ }
+  }
+}
+const CHECKS = path.join(HOME, 'checks.json');
+async function handleCheck(job) {
+  const d = readJson(CHECKS, {}), n = d.d === new Date().toDateString() ? d.n : 0;
+  if (n >= (cfg.maxChecksPerDay || 80)) throw new UserError('Your Mac has made its limit of photo checks for today.');
+  const dir = path.join(HOME, 'jobs', job.id);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'look.jpg'), job.photo);
+  job.photo = null;
+  const started = Date.now();
+  let said = '';
+  try {
+    await run(cfg.codex, ['exec', '--skip-git-repo-check', '-s', 'read-only', '-c', 'model_reasoning_effort="medium"', '-C', dir, '-i', 'look.jpg', '-o', 'last.txt', '-'], checkTask(job.lines, { mode: job.mode, occasion: job.occasion }), { cwd: dir, timeoutMs: 150000, job });
+    said = fs.readFileSync(path.join(dir, 'last.txt'), 'utf8').trim();
+  } catch (e) { if (e instanceof UserError) throw e; said = ''; }
+  finally { job.child = null; fs.rmSync(dir, { recursive: true, force: true }); }       // the photograph does not stay on the Mac
+  if (job.cancelled) throw new Error('cancelled');
+  const result = parseCheck(said, job.mode);
+  if (!result) throw new UserError('ChatGPT could not judge that photo. Take it again with the whole look in frame and in good light.');
+  fs.writeFileSync(CHECKS, JSON.stringify({ d: new Date().toDateString(), n: n + 1 }));
+  await say({ id: job.id, st: 'checked' }, await sealBytes(job.key, Buffer.from(JSON.stringify(result))));
+  log('check', job.id, 'done in', Math.round((Date.now() - started) / 1000) + 's:', result.verdict);
+}
+
 // ---------- the place ----------
 // What a place he named looks like, asked of ChatGPT with web search, once per place. The answer only ever describes a backdrop.
 const PLACES = path.join(HOME, 'places.json');
@@ -204,16 +278,20 @@ async function lookUp(job) {
   const key = (job.place.name + '|' + city).toLowerCase();
   const all = readJson(PLACES, {});
   const had = all[key];
-  if (had && Date.now() - had.at < (had.text ? 90 : 2) * 86400000) return had.text ? decorate(had, job) : null;
+  if (had && Date.now() - had.at < (had.text ? 90 * 86400000 : 30 * 60000)) return had.text ? decorate(had, job) : null;      // a place not found is asked about again after half an hour
   const dir = path.join(HOME, 'jobs', job.id + '-place');
   fs.mkdirSync(dir, { recursive: true });
   const started = Date.now();
-  const task = placeTask(job.place.name, job.place.kind, city);
-  let said = '';
-  try {
-    await run(cfg.codex, ['--search', 'exec', '--skip-git-repo-check', '-s', 'read-only', '-c', 'model_reasoning_effort="low"', '-C', dir, '-o', 'last.txt', '-'], task, { cwd: dir, timeoutMs: 90000, job });
-    said = fs.readFileSync(path.join(dir, 'last.txt'), 'utf8').trim();
-  } catch (e) { said = ''; }
+  const ask = async (task, effort) => {
+    try {
+      fs.rmSync(path.join(dir, 'last.txt'), { force: true });
+      await run(cfg.codex, ['--search', 'exec', '--skip-git-repo-check', '-s', 'read-only', '-c', `model_reasoning_effort="${effort}"`, '-C', dir, '-o', 'last.txt', '-'], task, { cwd: dir, timeoutMs: 90000, job });
+      return fs.readFileSync(path.join(dir, 'last.txt'), 'utf8').trim();
+    } catch (e) { return ''; }
+  };
+  let said = await ask(placeTask(job.place.name, job.place.kind, city, false), 'low');
+  // nothing under that spelling: he types fast, so look once more for the place the name sounds like
+  if (said === 'UNKNOWN' && !job.cancelled) said = await ask(placeTask(job.place.name, job.place.kind, city, true), 'medium');
   job.child = null;
   fs.rmSync(dir, { recursive: true, force: true });
   if (job.cancelled) throw new Error('cancelled');
@@ -228,14 +306,27 @@ async function lookUp(job) {
   return all[key].text ? decorate(all[key], job) : null;
 }
 // What ChatGPT is asked about a place. The answer names the place and its city, so a wrong match shows on the phone.
-function placeTask(name, kind, city) {
+// again: the exact spelling found nothing, so this time it looks for the place the name sounds like.
+function placeTask(name, kind, city, again) {
+  const tail = [
+    'Line 1: FOUND: then the proper name of the place, a comma, and the city it is in.',
+    'Line 2: one paragraph of at most 70 words that a photographer could use to recreate the spot where a guest would stand: what kind of place it is, whether that spot is indoors or outdoors, then materials, colours, lighting and signature features.',
+  ];
+  if (again) return [
+    'Do not write or run any code and do not create files. Use web search, up to five searches.',
+    `A man wrote that he is going to "${name}"${kind ? ' for ' + kind : ''}.${city ? ' He lives in ' + city + '.' : ''} He types fast, and a first search for that exact spelling found nothing, so the name is almost certainly misspelled or written the way it sounds.`,
+    `Work out the place he most likely means: search for places of that kind${city ? ' in or near ' + city : ''} whose names sound like or are spelled close to "${name}" (one or two letters added, dropped or swapped, an apostrophe or a plural missing).`,
+    'If one place stands out, reply with exactly two lines of plain text.',
+    ...tail,
+    'If nothing stands out, reply with exactly: UNKNOWN',
+  ].join('\n');
   return [
     'Do not write or run any code and do not create files. Use web search, at most three searches.',
     `A man wrote that he is going to "${name}"${kind ? ' for ' + kind : ''}. A photograph of him will be staged at that place, so find out what it looks like.`,
     city ? `He lives in ${city}, so the place is most likely there or nearby. If "${name}" is itself a city or a region somewhere else, pick one well known public spot in it instead.` : '',
+    'He types fast: the name may be misspelled, shortened or written the way it sounds. If a close spelling clearly points to one place, that is the place.',
     'If you can identify the place with confidence, reply with exactly two lines of plain text.',
-    'Line 1: FOUND: then the proper name of the place, a comma, and the city it is in.',
-    'Line 2: one paragraph of at most 70 words that a photographer could use to recreate the spot where a guest would stand: what kind of place it is, whether that spot is indoors or outdoors, then materials, colours, lighting and signature features.',
+    ...tail,
     'If you cannot identify one place with confidence, reply with exactly: UNKNOWN',
   ].filter(Boolean).join('\n');
 }
@@ -252,11 +343,26 @@ function run(cmd, args, input, { cwd, timeoutMs, job }) {
     if (job) job.child = child;
     let out = '';
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new UserError('ChatGPT took too long. Try again.')); }, timeoutMs);
-    child.stdout.on('data', (d) => { out += d; }); child.stderr.on('data', (d) => { out += d; });
+    const keep = (d) => { out = (out + d).slice(-200000); };          // only the end matters, and it can be megabytes of picture data
+    child.stdout.on('data', keep); child.stderr.on('data', keep);
     child.on('error', (e) => { clearTimeout(timer); reject(e); });
     child.on('close', (code) => { clearTimeout(timer); resolve({ code, out }); });
     child.stdin.end(input);
   });
+}
+// The path of the tool's own copy of the picture, found by plain scanning: a pattern search stalls for minutes on output
+// that holds a long unbroken run of characters, such as picture data.
+function keptPng(out) {
+  const mark = '.codex/generated_images/';
+  const stop = (c) => c === ' ' || c === '\n' || c === '\r' || c === '\t' || c === "'" || c === '"';
+  for (let at = out.lastIndexOf(mark); at >= 0; at = at > 0 ? out.lastIndexOf(mark, at - 1) : -1) {
+    let a = at, b = at + mark.length;
+    while (a > 0 && at - a < 300 && !stop(out[a - 1])) a--;
+    while (b < out.length && b - at < 300 && !stop(out[b])) b++;
+    const p = out.slice(a, b);
+    if (p.startsWith('/') && p.endsWith('.png')) return p;
+  }
+  return null;
 }
 const EDIT_HEADER = 'Use your built-in image generation tool to make ONE image. Do not write code to draw it. Two photos are attached: prev.jpg first, then me.jpg. Portrait orientation, 2:3. When the image exists, save or copy it into the current directory as mockup.png and reply with only that file path. Image brief:';
 const CODEX = ['exec', '--skip-git-repo-check', '-s', 'workspace-write', '-c', 'model_reasoning_effort="low"'];
@@ -274,19 +380,31 @@ async function draw(job, outJpg, images, task, prevJpg) {
   fs.copyFileSync(abs(cfg.photo), path.join(dir, 'me.jpg'));
   if (prevJpg) fs.copyFileSync(prevJpg, path.join(dir, 'prev.jpg'));
   const started = Date.now();
-  const { code, out } = await run(cfg.codex, [...CODEX, '-C', dir, ...images, '-o', 'last.txt', '-'], task, { cwd: dir, timeoutMs: 280000, job });
+  // The image tool sometimes hangs without an answer. A picture normally takes one to two minutes, so after three it is
+  // asked once more, which still fits inside the time the phone waits.
+  let res = null;
+  for (let attempt = 1; !res; attempt++) {
+    try { res = await run(cfg.codex, [...CODEX, '-C', dir, ...images, '-o', 'last.txt', '-'], task, { cwd: dir, timeoutMs: 170000, job }); }
+    catch (e) {
+      job.child = null;
+      if (job.cancelled || attempt >= 2 || !(e instanceof UserError)) { fs.rmSync(dir, { recursive: true, force: true }); throw e; }
+      log('job', job.id, 'the image tool stalled, asking once more');
+      fs.rmSync(path.join(dir, 'mockup.png'), { force: true }); fs.rmSync(path.join(dir, 'last.txt'), { force: true });
+    }
+  }
+  const { code, out } = res;
   job.child = null;
   if (job.cancelled) { fs.rmSync(dir, { recursive: true, force: true }); throw new Error('cancelled'); }
-  const kept = /(\/[^\s'"]*\.codex\/generated_images\/[^\s'"]+\.png)/.exec(out);          // the tool's own copy of this picture
+  const kept = keptPng(out);                                          // the tool's own copy of this picture
   let png = path.join(dir, 'mockup.png');
-  if (!fs.existsSync(png) && kept && fs.existsSync(kept[1])) png = kept[1];
+  if (!fs.existsSync(png) && kept && fs.existsSync(kept)) png = kept;
   if (!fs.existsSync(png)) {
     log('job', job.id, 'no picture, exit', code, 'after', Math.round((Date.now() - started) / 1000) + 's:', out.slice(-300).replace(/\s+/g, ' '));
     fs.rmSync(dir, { recursive: true, force: true });
     throw new UserError(/usage limit|rate limit|quota/i.test(out) ? 'Your ChatGPT plan has reached its limit for now. Try again later.' : /not logged in|login/i.test(out.slice(-600)) ? 'The ChatGPT app on your Mac is signed out. Sign in to it, then try again.' : 'ChatGPT did not return a picture. Try again.');
   }
   await new Promise((resolve, reject) => execFile('/usr/bin/sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '82', '-Z', '1536', png, '--out', outJpg], (e) => (e ? reject(e) : resolve())));
-  if (kept) { try { fs.rmSync(kept[1]); fs.rmdirSync(path.dirname(kept[1])); } catch (e) { /* not ours to force */ } }
+  if (kept) { try { fs.rmSync(kept); fs.rmdirSync(path.dirname(kept)); } catch (e) { /* not ours to force */ } }
   fs.rmSync(dir, { recursive: true, force: true });
   log('job', job.id, prevJpg ? 'picture edited in' : 'picture made in', Math.round((Date.now() - started) / 1000) + 's');
 }
