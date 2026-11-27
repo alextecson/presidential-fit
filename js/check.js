@@ -4,7 +4,8 @@
 // phone and on his Mac, so it uses nothing but plain text.
 
 export const VERDICTS = { ready: 'Ready to go', fix: 'Fix first', fits: 'It fits', tailor: 'Needs a tailor', nofit: 'Does not fit', unclear: 'Cannot tell from this photo' };
-const RULES = 'the shirt worn the way the plan says (fully tucked or untucked, never half tucked); belt leather that matches the shoes; one metal throughout (watch, buckle, frames); about a quarter inch of shirt cuff showing under a jacket sleeve; trousers with a slight break or none; a slim cut that is not tight; everything pressed and free of lint.';
+const RULES = 'the shirt worn the way the plan says (fully tucked or untucked, never half tucked); with leather shoes, belt leather of the same colour family (with sneakers or other soft shoes any belt in the plan is right); one metal throughout (watch, buckle, frames); with a tailored jacket and a long sleeved shirt, about a quarter inch of shirt cuff showing; trousers with a slight break or none; a slim cut that is not tight; everything pressed and free of lint.';
+const QUIET = 'Brand and model names in the plan only identify the piece. Do not comment on brands, logos or whether a make can be read, and do not ask him to check something the photograph cannot show.';
 
 // What ChatGPT is asked. lines: the plan, "LABEL: description" per piece. mode 'look' checks a finished fit, 'piece' judges how one garment fits.
 export function checkTask(lines, { mode = 'look', occasion = '' } = {}) {
@@ -20,6 +21,7 @@ export function checkTask(lines, { mode = 'look', occasion = '' } = {}) {
       'The piece:',
       ...lines.map((l) => '- ' + l),
       'Judge how it fits him, as far as each point applies and the photograph shows it: shoulders, chest, waist, sleeve length, length of the body, seat, thigh, trouser length and break, heel and toe room.',
+      QUIET,
       'Reply in plain text, in exactly this form:',
       'VERDICT: FITS or NEEDS TAILORING or DOES NOT FIT or CANNOT TELL',
       ...form.slice(0, 1),
@@ -33,6 +35,8 @@ export function checkTask(lines, { mode = 'look', occasion = '' } = {}) {
     'He planned to wear:',
     ...lines.map((l) => '- ' + l),
     `His standing rules: ${RULES}`,
+    'A piece that is in the plan is right by definition: judge whether it is the one worn and how it is worn, not whether it was a good choice.',
+    QUIET,
     'Go through the plan piece by piece, then the look as a whole. Is each planned piece the one in the photograph? Does it fit him? Is anything off: tuck, collar, cuffs, hem, wrinkles, lint, a stain, something unbuttoned or twisted, laces, a belt that does not match the shoes, metals that do not match?',
     'Reply in plain text, in exactly this form:',
     'VERDICT: READY or FIX FIRST',

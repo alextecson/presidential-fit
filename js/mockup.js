@@ -1,6 +1,6 @@
 // Presidential Fit: realistic mockups of a fit, with you as the model, made by ChatGPT's image engine.
 // Three routes: (1) in the app, through the OpenAI API with your own key; (2) on your own Mac, through js/link.js; (3) hand off to your ChatGPT app.
-import { rows, SLOT_LABEL, OCCASIONS, colorOf } from './engine.js';
+import { rows, SLOT_LABEL, OCCASIONS, colorOf, extraLabel } from './engine.js';
 
 export const MODELS = ['gpt-image-2.6-sunburst', 'gpt-image-2.5-sunburst', 'gpt-image-2', 'gpt-image-1.5'];
 export const SCENES = {
@@ -78,6 +78,12 @@ function pieceLine(r) {
   return `${label}: ${d}`;
 }
 
+// One piece on its own, for a photo check of how it fits: its label and its plain description.
+export function plainLine(it) {
+  const label = (it.cat === 'extra' ? extraLabel(it) : SLOT_LABEL[it.cat] || 'Piece').toUpperCase();
+  const c = colorOf(it).label;
+  return `${label}: ${it.name}${c && !it.name.toLowerCase().includes(c.split(' ').pop()) ? ` (${c})` : ''}`;
+}
 // The brief for one fit: what he wears, line by line, and where he stands. Plain text only, so it can be sent to his Mac as is.
 // place = { venue, spot, when }: the place he named, or the kind of place, and the part of the day. It becomes the backdrop.
 export function briefFor(o, items, profile, sceneKey = 'auto', place = null) {

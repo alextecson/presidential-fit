@@ -1,9 +1,9 @@
 // Presidential Fit: offline shell. One release is cached as a set, so files never mix versions.
 // Calls to OpenAI, the weather service and the relay to the wearer's Mac always go to the network.
-const RELEASE = '1.7.0';
+const RELEASE = '1.8.0';
 const CACHE = 'pf-shell-' + RELEASE;
 const SHELL = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'sample-closet.json',
-  'js/app.js', 'js/store.js', 'js/engine.js', 'js/ask.js', 'js/link.js', 'js/mockup.js', 'js/figure.js', 'js/weather.js',
+  'js/app.js', 'js/store.js', 'js/engine.js', 'js/ask.js', 'js/link.js', 'js/check.js', 'js/mockup.js', 'js/figure.js', 'js/weather.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => Promise.all(SHELL.map((u) => fetch(new Request(u, { cache: 'reload' })).then((r) => { if (r.ok) return c.put(u, r); })))).then(() => self.skipWaiting()));

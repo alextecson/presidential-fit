@@ -130,6 +130,25 @@ main { flex: 1; display: flex; flex-direction: column; gap: 14px; outline: 0;
 .making-text span { font-size: .84rem; opacity: .9; }
 .making-text .spinner { border-color: rgba(255, 255, 255, .3); border-top-color: #fff; }
 .setat { margin: 7px 2px 0; }
+.lookcheck { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 9px; }
+.lookcheck h3 { margin: 0; }
+.lookcheck .lc-head { display: flex; gap: 12px; align-items: center; }
+.lookcheck .lc-head img { width: 62px; height: 84px; object-fit: cover; object-position: center top; border-radius: 10px; flex: 0 0 auto; background: var(--soft); }
+.lookcheck .lc-head h3 { font: 600 1.25rem/1.2 var(--serif); letter-spacing: 0; text-transform: none; color: var(--ink, inherit); }
+.lookcheck .lc-head h3.lc-ok { color: var(--ok); } .lookcheck .lc-head h3.lc-bad { color: var(--warn); }
+.lookcheck ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.lookcheck li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; align-items: start; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: .87rem; line-height: 1.35; }
+.lookcheck li:last-child { border-bottom: 0; }
+.lookcheck li b { display: block; font: 600 .64rem/1.5 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--mute); }
+.lookcheck li i { width: 18px; height: 18px; margin-top: 3px; border-radius: 50%; background: color-mix(in srgb, var(--ok) 16%, transparent); position: relative; }
+.lookcheck li i::after { content: ""; position: absolute; left: 5px; top: 5.5px; width: 7px; height: 4px; border-left: 1.8px solid var(--ok); border-bottom: 1.8px solid var(--ok); transform: rotate(-45deg); }
+.lookcheck li.note i, .lookcheck li.bad i { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.lookcheck li.note i::after, .lookcheck li.bad i::after { left: 8px; top: 4px; width: 0; height: 7px; border: 0; border-left: 2px solid var(--warn); transform: none; box-shadow: 0 9.5px 0 -0.2px var(--warn); }
+.lookcheck li.bad i { background: color-mix(in srgb, var(--danger) 18%, transparent); }
+.lookcheck li.bad i::after { border-left-color: var(--danger); box-shadow: 0 9.5px 0 -0.2px var(--danger); }
+.lookcheck li.you i { background: none; border: 1.6px solid var(--mute); opacity: .7; }
+.lookcheck li.you i::after { display: none; }
+.lookcheck li .link { display: inline; padding: 0; margin-left: 4px; font-size: .82rem; }
 .photo-setup { display: flex; flex-direction: column; gap: 7px; border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 14px; padding: 14px; background: color-mix(in srgb, var(--accent) 7%, var(--card)); }
 .photo-setup b { font: 600 1.05rem/1.25 var(--serif); }
 .photo-setup span { font-size: .88rem; color: var(--mute); line-height: 1.4; }

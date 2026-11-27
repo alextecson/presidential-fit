@@ -6,8 +6,9 @@ import { figureSvg } from './figure.js';
 import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
 import { parseAsk, windowFor, colourSaid } from './ask.js';
 import * as L from './link.js';
+import * as C from './check.js';
 
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -498,9 +499,10 @@ async function hydrateImages(root = document) {
     if (u) { img.src = u; img.removeAttribute('data-blob'); } else img.remove();
   }
 }
-function pickFile(accept, multiple = false) {
+function pickFile(accept, multiple = false, camera = false) {
   return new Promise((resolve) => {
     const inp = $('#filePick'); inp.value = ''; inp.accept = accept; inp.multiple = multiple;
+    if (camera) inp.setAttribute('capture', 'environment'); else inp.removeAttribute('capture');      // straight to the camera, or the phone's own chooser
     inp.onchange = () => resolve([...inp.files]);
     inp.click();
   });
@@ -655,6 +657,82 @@ function photoSlot(o, mk, ph) {
   if (ph.kind === 'cap') return box('Automatic mockups are done for today', `${AUTO_CAP} were made by themselves today. This one is made when you ask.`, '<button class="btn primary small" data-act="retryAuto">Create my mockup</button>');
   return box('See this fit on you', 'ChatGPT puts this fit on you in about a minute.', '<button class="btn primary small" data-act="retryAuto">Create my mockup</button>');
 }
+// ---------- the photo check ----------
+// A photograph of the finished look, or of one piece he is trying on. ChatGPT on his Mac reads it against the plan and his
+// rules (js/check.js). The photograph is sealed on the way, looked at once and not kept on the Mac. The phone keeps it
+// with the reading so he can see what was checked.
+const look = { busy: null, key: null, ctl: null, error: '', errKey: null };
+const canCheck = () => !!(ui.link && st().settings.linkSeen);
+const redrawLook = () => { if (ui.sheet && ui.sheet.type === 'item') { renderSheet(); hydrateImages($('#sheet')); } else settle(); };
+async function startCheck(d, camera) {
+  if (look.busy) { toast('One photo is already being checked.'); return; }
+  if (!canCheck()) { toast('The photo check runs on your Mac, and it has not been seen yet.', 5000); return; }
+  const piece = d && d.id ? item(d.id) : null;
+  if (!piece && !current().o) return;
+  const [f] = await pickFile('image/*', false, camera);
+  if (f) await runCheck(piece, f);
+}
+// One photograph, checked: against the fit on screen, or as a fitting of one piece.
+async function runCheck(piece, f) {
+  if (look.busy) return;
+  const o = piece ? null : current().o;
+  if (!piece && !o) return;
+  const key = piece ? 'piece:' + piece.id : E.signature(o);
+  const plan = piece ? { mode: 'piece', occasion: '', lines: [M.plainLine(piece)] } : { mode: 'look', occasion: E.sayOf(o.occ), lines: M.briefFor(o, st().items, st().profile, 'auto').lines };
+  // which closet piece each line of the plan is, so a fit problem can be noted on the piece
+  const labels = piece ? { [plan.lines[0].split(':')[0]]: piece.id } : Object.fromEntries(E.rows(o, st().items).filter((r) => r.item).map((r) => [(r.label || E.SLOT_LABEL[r.slot]).toUpperCase(), r.item.id]));
+  look.busy = 'Getting the photo ready'; look.key = key; look.error = ''; look.errKey = null; look.ctl = new AbortController(); redrawLook();
+  try {
+    const blob = await M.downscale(f, 1600, 0.86);
+    const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+    if (head[0] !== 0xff || head[1] !== 0xd8) throw new Error('That photo could not be read. Take it again, or choose another.');
+    look.busy = 'Reaching your Mac'; redrawLook();
+    const res = await L.askCheck(ui.link, plan, blob, { signal: look.ctl.signal, onStage: (s) => { look.busy = s.st === 'asleep' ? 'Your Mac is not answering. Wake it and this carries on by itself.' : s.st === 'sending' ? 'Sending the photo, sealed' : 'ChatGPT is looking at the photo'; redrawLook(); } });
+    st().looks = st().looks || {};
+    const old = st().looks[key];
+    const id = 'look:' + S.uid('k');
+    await S.blobPut(id, blob);
+    if (old && old.photo) await S.blobDel(old.photo);
+    st().looks[key] = { at: Date.now(), mode: plan.mode, verdict: res.verdict, pieces: res.pieces || [], fix: res.fix || [], good: res.good || [], photo: id, labels };
+    // the newest twenty readings are kept
+    const keys = Object.keys(st().looks).sort((a, b) => st().looks[b].at - st().looks[a].at);
+    for (const k of keys.slice(20)) { if (st().looks[k].photo) await S.blobDel(st().looks[k].photo); delete st().looks[k]; }
+    if (piece) {                                                    // how a piece fits is remembered on the piece, and the stylist takes it into account
+      const p0 = (res.pieces || [])[0] || {};
+      if (res.verdict === 'fits') { delete piece.fitIssue; piece.fitOk = today(); }
+      else if (res.verdict === 'tailor' || res.verdict === 'nofit') { piece.fitIssue = `${C.VERDICTS[res.verdict]}. ${res.fix[0] || p0.note || ''}`.trim() + ` (photo check ${E.shortDate(today())})`; delete piece.fitOk; }
+    }
+    await S.save(true);
+  } catch (e) { if (!(e && e.name === 'AbortError')) { look.error = (e && e.message) || 'That did not work. Try again.'; look.errKey = key; } }
+  look.busy = null; look.ctl = null;
+  redrawLook();
+}
+const nicer = (label) => { const t = String(label || '').toLowerCase(); return t ? t[0].toUpperCase() + t.slice(1) : ''; };
+function lookHtml(key, mode, id) {
+  const rec = (st().looks || {})[key];
+  const err = look.error && look.errKey === key ? `<p class="error">${esc(look.error)}</p>` : '';
+  const forId = id ? ` data-id="${esc(id)}"` : '';
+  const buttons = (again) => `<div class="actions wrap"><button class="btn small${again ? '' : ' primary'}" data-act="lookShot"${forId}>${again ? 'Take a new photo' : 'Take a photo'}</button><button class="btn small" data-act="lookPick"${forId}>Choose a photo</button>${again ? `<button class="btn small danger" data-act="lookClear" data-key="${esc(key)}">Remove</button>` : ''}</div>`;
+  if (look.busy && look.key === key) return `<div class="lookcheck"><h3>Photo check</h3><div class="busy"><div class="spinner"></div><p>${esc(look.busy)}</p></div><div class="actions"><button class="btn small" data-act="lookCancel">Cancel</button></div></div>`;
+  if (!rec) {
+    const what = mode === 'piece' ? 'Put it on and take a photo. ChatGPT on your Mac says how it fits, and the piece remembers it.' : 'Dressed? Take a photo of the whole look. ChatGPT on your Mac checks it against this fit and your rules before you leave.';
+    return `<div class="lookcheck"><h3>Photo check</h3><p class="fine">${what}</p>${err}${canCheck() ? buttons(false) : '<p class="fine">It runs on your Mac, which has not been seen yet.</p>'}</div>`;
+  }
+  const tone = rec.verdict === 'ready' || rec.verdict === 'fits' ? 'ok' : rec.verdict === 'unclear' ? 'you' : 'bad';
+  const OFF = ['tight', 'loose', 'long', 'short'];
+  const lis = [];
+  for (const t of rec.fix || []) lis.push(`<li class="bad"><i aria-hidden="true"></i><span><b>Fix</b>${esc(t)}</span></li>`);
+  for (const p of rec.pieces || []) {
+    const state = [p.seen === 'different' ? 'not as planned' : p.seen === 'hidden' ? 'not in view' : '', OFF.includes(p.fit) ? 'runs ' + p.fit : p.fit === 'good' ? 'fits' : ''].filter(Boolean).join(', ');
+    const pid = (rec.labels || {})[p.label], it = pid ? item(pid) : null;
+    const save = it && mode !== 'piece' && OFF.includes(p.fit) && p.seen !== 'hidden' ? ` <button class="link" data-act="noteFit" data-id="${esc(pid)}" data-key="${esc(key)}" data-label="${esc(p.label)}"${it.fitIssue ? ' disabled' : ''}>${it.fitIssue ? 'Noted on the piece' : 'Note it on the piece'}</button>` : '';
+    const cls = p.seen === 'different' || OFF.includes(p.fit) ? 'note' : p.seen === 'hidden' ? 'you' : 'ok';
+    lis.push(`<li class="${cls}"><i aria-hidden="true"></i><span><b>${esc(nicer(p.label))}${state ? ' · ' + esc(state) : ''}</b>${esc(p.note || '')}${save}</span></li>`);
+  }
+  for (const t of rec.good || []) lis.push(`<li class="ok"><i aria-hidden="true"></i><span><b>Works</b>${esc(t)}</span></li>`);
+  return `<div class="lookcheck"><div class="lc-head">${rec.photo ? `<img data-blob="${esc(rec.photo)}" alt="The photo that was checked">` : ''}<div><div class="eyebrow">Photo check · ${esc(E.shortDate(E.isoDate(new Date(rec.at))))} ${esc(E.clockLabel(rec.at))}</div><h3 class="lc-${tone}">${esc(C.VERDICTS[rec.verdict] || 'Checked')}</h3></div></div>
+    <ul>${lis.join('')}</ul>${err}${canCheck() ? buttons(true) : ''}</div>`;
+}
 // Every factor that was checked for this fit, problems first.
 function checksHtml(checks) {
   if (!checks.length) return '';
@@ -698,6 +776,7 @@ function viewFit() {
       ${c.entry && c.entry.note && c.logged ? `<p class="note">${esc(c.entry.note)}</p>` : ''}
       ${c.why.length ? `<div class="why"><h3>Why it works</h3><p>${c.why.map(esc).join(' ')}</p></div>` : ''}
       ${checksHtml(c.checks)}
+      ${lookHtml(E.signature(c.o), 'look', '')}
       <div class="actions">
         ${c.logged
           ? `${c.entry.status === 'planned' && (past || isToday) ? '<button class="btn primary" data-act="markWorn">I wore it</button>' : ''}
@@ -785,10 +864,15 @@ function viewMore() {
 // ---------- sheets ----------
 function openSheet(s) { ui.sheet = s; renderSheet(); hydrateImages($('#sheet')); }
 function closeSheet() { ui.sheet = null; renderSheet(); }
+let sheetShown = '';
 function renderSheet() {
   const el = $('#sheet');
-  if (!ui.sheet) { el.hidden = true; el.innerHTML = ''; document.body.classList.remove('sheet-open'); return; }
+  if (!ui.sheet) { el.hidden = true; el.innerHTML = ''; document.body.classList.remove('sheet-open'); sheetShown = ''; return; }
   const s = ui.sheet;
+  // the same sheet drawn again (a status changed) stays where it was scrolled to and does not slide in a second time
+  const name = s.type + ':' + (s.id || s.slot || '');
+  const again = !el.hidden && sheetShown === name && !!el.querySelector('.panel');
+  const kept = again ? el.querySelector('.panel').scrollTop : 0;
   let inner = '';
   if (s.type === 'swap') inner = sheetSwap(s);
   else if (s.type === 'item') inner = sheetItem(s);
@@ -800,6 +884,8 @@ function renderSheet() {
   else if (s.type === 'confirm') inner = `<h2>${esc(s.title)}</h2><p>${esc(s.text)}</p><div class="actions"><button class="btn danger" data-act="confirmYes">${esc(s.yes)}</button><button class="btn" data-act="closeSheet">Cancel</button></div>`;
   el.innerHTML = `<div class="backdrop" data-act="closeSheet"></div><div class="panel" role="dialog" aria-modal="true"><div class="grab" data-act="closeSheet"></div>${inner}</div>`;
   el.hidden = false; document.body.classList.add('sheet-open');
+  if (again) { const pn = el.querySelector('.panel'), bd = el.querySelector('.backdrop'); pn.style.animation = 'none'; if (bd) bd.style.animation = 'none'; pn.scrollTop = kept; }
+  sheetShown = name;
 }
 function sheetOcc() {
   return `<h2>What kind of day</h2><p class="fine">Pick the one the fit is for. The fit is rebuilt and checked again.</p>
@@ -843,6 +929,8 @@ function sheetItem(s) {
     <label class="toggle"><input type="checkbox" data-in="itemActive" data-id="${esc(i.id)}"${i.status !== 'retired' ? ' checked' : ''}><span>In rotation</span></label>
     <label class="toggle"><input type="checkbox" data-in="itemAuto" data-id="${esc(i.id)}"${!i.hold ? ' checked' : ''}><span>Stylist may pick it</span></label>
     ${['jacket', 'top', 'bottom', 'shoes', 'belt', 'suit'].includes(i.cat) ? `<label class="toggle"><input type="checkbox" data-in="itemTeach" data-id="${esc(i.id)}"${!i.noTeach ? ' checked' : ''}><span>Allowed in class</span></label>` : ''}
+    ${i.fitIssue ? `<p class="note">Fit: ${esc(i.fitIssue)} <button class="link" data-act="clearFit" data-id="${esc(i.id)}">Clear</button></p>` : ''}
+    ${['suit', 'jacket', 'coat', 'top', 'bottom', 'shoes', 'hat'].includes(i.cat) ? lookHtml('piece:' + i.id, 'piece', i.id) : ''}
     <div class="actions wrap"><button class="btn small" data-act="itemPhoto" data-id="${esc(i.id)}">${i.photo ? 'Replace photo' : 'Add photo'}</button>
       <button class="btn small" data-act="wearItem" data-id="${esc(i.id)}">Build a fit around it</button>
       <button class="btn small danger" data-act="delItem" data-id="${esc(i.id)}">Delete</button></div>
@@ -1093,6 +1181,17 @@ const A = {
     }
   },
   cancelMockup: () => { if (ui.abort) ui.abort.abort(); if (auto.ctl) auto.ctl.abort(); ui.busy = null; renderSheet(); },
+  lookShot: (d) => startCheck(d, true),
+  lookPick: (d) => startCheck(d, false),
+  lookCancel: () => { if (look.ctl) look.ctl.abort(); },
+  lookClear: async (d) => { const r = (st().looks || {})[d.key]; if (!r) return; if (r.photo) await S.blobDel(r.photo); delete st().looks[d.key]; await S.save(true); redrawLook(); },
+  noteFit: (d) => {
+    const it = item(d.id), r = (st().looks || {})[d.key]; if (!it || !r) return;
+    const p = (r.pieces || []).find((x) => x.label === d.label); if (!p) return;
+    it.fitIssue = `Runs ${p.fit}${p.note ? '. ' + p.note : ''} (photo check ${E.shortDate(today())})`; delete it.fitOk;
+    S.save(); reaudit(); redrawLook(); toast('Noted on the piece. The stylist takes it into account.', 4000);
+  },
+  clearFit: (d) => { const it = item(d.id); if (!it) return; delete it.fitIssue; S.save(); if (ui.mode === 'fit') reaudit(); redrawLook(); },
   retryAuto: () => { const c = current(); if (!c.o) return null; const sig = mockKey(c.o); auto.failed.delete(sig); return runAuto(sig, true); },
   setupKey: () => { ui.tab = 'more'; closeSheet(); render(); const el = $('#keyCard'); if (el) el.scrollIntoView({ block: 'start' }); },
   pasteMock: async () => {
@@ -1258,5 +1357,5 @@ async function boot() {
     refresh();
   });
 }
-window.PF = { ui, S, E, M, L, doImport, answer, parseAsk };
+window.PF = { ui, S, E, M, L, doImport, answer, parseAsk, runCheck };
 boot().catch((e) => { console.error(e); render(); });
