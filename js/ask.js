@@ -28,6 +28,29 @@ const FILL = set('the my a an any more that those these of wear wearing to going
 const INTENT = set('wear wearing with in add adding use using want around and plus my the a an try rock rocking bring keep swap switch to for');
 const GENERIC = set('special occasion happy hour night evening morning visit room club house place time date out day the or and a of');
 
+// Words that name a kind of place. The mockup is staged there when no place is named outright (the scenes live in mockup.js).
+const SPOT_OF = {
+  casino: 'casino', steakhouse: 'steakhouse', sushi: 'sushi', buffet: 'buffet', brunch: 'brunch',
+  concert: 'concert', residency: 'concert', theater: 'theater', theatre: 'theater', musical: 'theater', opera: 'theater', symphony: 'theater', comedy: 'theater', show: 'theater', premiere: 'theater', recital: 'theater',
+  game: 'arena', fight: 'arena', movie: 'cinema', movies: 'cinema', nightclub: 'nightclub', clubbing: 'nightclub', festival: 'festival', cruise: 'cruise', tailgate: 'tailgate',
+  wedding: 'wedding', weddings: 'wedding', graduation: 'graduation', commencement: 'graduation', pinning: 'graduation', funeral: 'chapel', memorial: 'chapel', baptism: 'church', christening: 'church',
+  gala: 'ballroom', banquet: 'ballroom', fundraiser: 'ballroom', awards: 'ballroom', 'black tie': 'ballroom', church: 'church', mass: 'church', temple: 'church',
+  hospital: 'hospital', clinical: 'hospital', clinicals: 'hospital', clinic: 'clinic', conference: 'conference', airport: 'airport', flight: 'airport', flying: 'airport',
+  mall: 'mall', shopping: 'mall', park: 'park', picnic: 'park', beach: 'beach', coffee: 'coffee', breakfast: 'diner', barber: 'barber', haircut: 'barber',
+  cookout: 'cookout', bbq: 'cookout', barbecue: 'cookout', brewery: 'brewery', winery: 'winery', 'wine tasting': 'winery', pub: 'pub', tavern: 'pub', speakeasy: 'speakeasy',
+  'pool hall': 'pool', billiards: 'pool', 'driving range': 'golf',
+};
+// Reading a place named outright: "at X", "going to X", "background: X".
+const PLACE_JOIN = set('of de la el del the n');
+const PLACE_MOVE = set('going headed heading go off over out trip drive driving walk walking fly flying');
+const PLACE_SAYS = set('background backdrop destination location venue setting scene');
+const PLACE_LINK = set('| is as at to be of in');
+const PLACE_OWN = set('my our his her a an');
+const NOT_PLACE = set('see meet get grab eat watch play visit pick buy shop hang stay attend celebrate catch run hit check take find help bring change try teach speak present relax chill talk enjoy join');
+const HOMEY = set('mom moms mum mums mother mothers dad dads father fathers parents grandma grandmas grandpa grandpas aunt aunts uncle uncles cousin cousins sister sisters brother brothers friend buddy buddys neighbor neighbors inlaws');
+const DWELL = set('house apartment condo crib');
+const NOT_NAME = set('instead actually though tho now later first pls thanks thx tonite least most once random ease');
+
 // Default hours for each kind of day, and for a part of the day when one is named.
 const WINDOWS = { teach: [7, 16], work: [8, 18], dinner: [18, 22], lounge: [17, 23], bar: [17, 24], event: [18, 24], dressy: [15, 23], casual: [9, 19] };
 const PARTS = { morning: [6, 12], midday: [11, 14], afternoon: [12, 17], evening: [17, 22], night: [18, 24], allday: [7, 22] };
@@ -319,8 +342,8 @@ export function windowFor(ask, date, now = new Date()) {
 // env: { today, date (used when no day is named), fixDate (ignore days named in the text), items, profile }
 export function parseAsk(text, env) {
   const today = env.today, profile = env.profile || {}, groups = profile.groups || [];
-  const out = { text: String(text || '').trim(), date: env.date || today, dateSaid: false, occ: null, occSaid: false, also: [], negKinds: [], mods: {}, locks: {}, allow: {}, exclude: [], notes: [], parts: [], clock: null, clockAp: '', lunch: false, venue: '', wore: false };
-  const full = canon(clean(out.text));
+  const out = { text: String(text || '').trim(), date: env.date || today, dateSaid: false, occ: null, occSaid: false, also: [], negKinds: [], mods: {}, locks: {}, allow: {}, exclude: [], notes: [], parts: [], clock: null, clockAp: '', lunch: false, venue: '', venueSoft: false, venueHome: false, venueOff: false, spot: '', wore: false };
+  const full = canon(clean(out.text.replace(/@/g, ' at ')));
   // "I wore this last week", "same outfit as last time": the fit he is looking at has been worn and should change
   out.wore = /\b(?:wore|worn)\b[^|]*\b(?:this|that|it|same)\b|\bsame (?:outfit|fit|look|thing|one)\b/.test(full);
   let s = full.replace(/\bshow me\b/g, ' ').replace(/\s+/g, ' ').trim();
@@ -429,25 +452,65 @@ export function parseAsk(text, env) {
     out.occ = keyOf(lead); out.occSaid = true;
     out.also = [...new Set(real.filter((k) => k !== lead).map(keyOf).filter((k) => k !== out.occ))];
   }
+  // the kind of place the main stop is ("the casino", "sushi"), in the order he said them
+  const padded = ' ' + full + ' ';
+  const spots = pos.filter((f) => SPOT_OF[f.w] && f.kind === lead).sort((a, b) => padded.indexOf(' ' + a.w + ' ') - padded.indexOf(' ' + b.w + ' '));
+  if (spots.length) out.spot = SPOT_OF[spots[0].w];
+  else if (out.mods.golf && (!lead || lead === 'casual')) out.spot = 'golf';
   let shift = up - down;
   if (smart && out.occ === 'casual') shift = 1;
   if (out.lunch) shift -= 0.5;
   if (shift) out.mods.shift = Math.max(-1.5, Math.min(1.5, shift));
 
-  // A place named after "at" ("dinner at Marios"): kept for the reply, and kept out of the piece scan.
+  // A place named outright ("dinner at Marios", "going to the Marios", "background: the pier"): kept for the reply and for the
+  // mockup's backdrop, and kept out of the piece scan. The first one named stands, unless he says outright where the picture is set.
   const toks = s.split(' ');
   const plain = (w) => /^[a-z][a-z0-9]*$/.test(w) && !STOP.has(w) && !FILL.has(w) && !NEG.has(w) && !DESC.has(w) && !(w in NOUNS) && !DAYPART.has(w);
   for (let i = 0; i < toks.length; i++) {
-    if (toks[i] !== 'at') continue;
-    const the = toks[i + 1] === 'the';
-    let j = the ? i + 2 : i + 1;
-    const words = [];
-    while (j < toks.length && words.length < 3 && plain(toks[j])) { words.push(toks[j]); toks[j] = '§'; j++; }
-    if (words.length && !out.venue) {
-      const m2 = new RegExp(words.join('\\W+'), 'i').exec(out.text);
-      const shown = m2 ? m2[0] : words.join(' ');
-      out.venue = (the ? 'the ' : '') + (shown === shown.toLowerCase() ? shown.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : shown);
+    let j = -1, soft = false, said = false;
+    if (toks[i] === 'at') j = i + 1;
+    else if (toks[i] === 'to' && i > 0 && PLACE_MOVE.has(toks[i - 1])) { j = i + 1; soft = true; }
+    else if (PLACE_SAYS.has(toks[i]) || (toks[i] === 'place' && PLACE_LINK.has(toks[i + 1]))) { j = i + 1; said = true; while (j < toks.length && PLACE_LINK.has(toks[j])) j++; }
+    if (j < 0) continue;
+    const det = toks[j] === 'the' || PLACE_OWN.has(toks[j]) ? toks[j++] : '';
+    const own = !!det && det !== 'the';
+    const words = [], at = [];
+    const name = (k) => plain(toks[k]) && !NOT_NAME.has(toks[k]);
+    while (j < toks.length && words.length < 5) {
+      if (name(j) && !(soft && !words.length && NOT_PLACE.has(toks[j]))) { words.push(toks[j]); at.push(j); j++; }
+      else if (words.length && PLACE_JOIN.has(toks[j]) && j + 1 < toks.length && name(j + 1)) { words.push(toks[j]); at.push(j); j++; }
+      else if (words.length && PLACE_JOIN.has(toks[j]) && PLACE_JOIN.has(toks[j + 1]) && j + 2 < toks.length && name(j + 2)) { words.push(toks[j], toks[j + 1]); at.push(j, j + 1); j += 2; }
+      else break;
     }
+    // "my friends house": the word before the house was read as an occasion, and it is still somebody's home
+    let lost = '';
+    if (!words.length && own && toks[j] === '§' && (DWELL.has(toks[j + 1]) || toks[j + 1] === 'place')) {
+      const g = new RegExp(' at ' + det + ' ([a-z]+) ' + toks[j + 1] + ' ').exec(padded);
+      lost = g ? g[1] + ' ' : '';
+      words.push(toks[j + 1]); at.push(j + 1); j += 2;
+    }
+    if (!words.length) continue;
+    // "Lakeside Hospital": the kind of place that follows a name is part of the name
+    const tail = toks[j] === '§' ? new RegExp(' ' + words.join(' ') + ' ([a-z]+) ').exec(padded) : null;
+    if (tail && SPOT_OF[tail[1]]) words.push(tail[1]);
+    const last = words[words.length - 1];
+    const homey = !!lost || words.some((w) => HOMEY.has(w)) || (own && last === 'place') || (DWELL.has(last) && (words.length === 1 || /s$/.test(words[words.length - 2])));
+    if ((own && !homey) || (!own && words.length === 1 && last === 'place')) continue;   // "at my gym", "at the place": nothing to stage
+    for (const k of at) toks[k] = '§';
+    if (said) toks[i] = '§';
+    const clause = toks.slice(toks.lastIndexOf('|', i) + 1, i);
+    if (clause.includes('wore') || clause.includes('worn')) continue;                     // where he wore something before is not where he is going
+    if (out.venue && !said) continue;
+    // which stop the place belongs to: one that only rides along does not set the scene
+    const vpos = padded.indexOf(' ' + words.join(' ') + ' ');
+    let near = null, best = -1;
+    for (const f of pos) { const k = padded.lastIndexOf(' ' + f.w + ' ', vpos < 0 ? padded.length : vpos); if (k > best) { best = k; near = f.kind; } }
+    const m2 = new RegExp(words.join('\\W+'), 'i').exec(out.text);
+    const shown = m2 ? m2[0] : words.join(' ');
+    const title = shown === shown.toLowerCase() ? shown.replace(/\b[a-z]/g, (c) => c.toUpperCase()).replace(/ (Of|The|De|La|El|Del|N)(?= )/g, (x) => x.toLowerCase()) : shown;
+    out.venue = homey && det ? det + ' ' + lost + words.join(' ') : (det === 'the' ? 'the ' : '') + title;
+    out.venueSoft = soft; out.venueHome = homey;
+    out.venueOff = !said && !!near && near !== lead && real.includes(near);
   }
   scanPieces(toks.join(' '), env.items || [], out);
   return out;

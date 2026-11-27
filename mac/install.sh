@@ -8,6 +8,12 @@ DIR="$HOME/Library/Application Support/PresidentialFit"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 SRC=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 NODE=$(command -v node)
+# A mockup that is being made right now is allowed to finish first (five minutes at most).
+n=0
+while [ -f "$DIR/busy" ] && [ "$n" -lt 150 ]; do
+  [ "$n" -eq 0 ] && echo "A mockup is being made. Waiting for it to finish."
+  sleep 2; n=$((n + 1))
+done
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 if [ "${1:-}" = "remove" ]; then rm -f "$PLIST"; rm -rf "$DIR/helper"; echo "Helper removed. Private files stay in $DIR."; exit 0; fi
 [ -f "$DIR/profile.json" ] && [ -f "$DIR/me.jpg" ] || { echo "Put profile.json and me.jpg in $DIR first."; exit 1; }

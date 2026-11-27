@@ -129,6 +129,7 @@ main { flex: 1; display: flex; flex-direction: column; gap: 14px; outline: 0;
 .making-text b { font: 600 1.12rem/1.25 var(--serif); }
 .making-text span { font-size: .84rem; opacity: .9; }
 .making-text .spinner { border-color: rgba(255, 255, 255, .3); border-top-color: #fff; }
+.setat { margin: 7px 2px 0; }
 .photo-setup { display: flex; flex-direction: column; gap: 7px; border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 14px; padding: 14px; background: color-mix(in srgb, var(--accent) 7%, var(--card)); }
 .photo-setup b { font: 600 1.05rem/1.25 var(--serif); }
 .photo-setup span { font-size: .88rem; color: var(--mute); line-height: 1.4; }

@@ -56,6 +56,13 @@ export async function sessionKey(priv, otherPub, id) {
   return crypto.subtle.importKey('raw', await sha(mat), 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
 
+// A brief is the list of pieces plus the setting. Both devices clean it and name it the same way, so the phone can say
+// "this follows the mockup you made for that brief" and the Mac can find that picture.
+export const tidy = (s, n) => String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f`$\\<>{}]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n).trim();
+export async function briefHash(lines, scene) {
+  return hex(await sha((lines || []).map((l) => tidy(l, 240)).join('\n') + '|' + tidy(scene, 300))).slice(0, 32);
+}
+
 // Messages on a relay topic since a moment (unix seconds, a duration like "12h", or a message id).
 export async function read(topic, since, signal) {
   const res = await fetch(`${RELAY}/${topic}/json?poll=1&since=${encodeURIComponent(since)}`, { cache: 'no-store', signal });
@@ -82,26 +89,41 @@ export async function probe(link, signal) {
 export class LinkError extends Error { constructor(message, kind) { super(message); this.kind = kind; } }
 
 // Ask the Mac for one mockup and wait for it. brief = { lines, scene } from mockup.js. Resolves to a JPEG Blob.
-export async function askMac(link, brief, { signal, onStage, fresh = false, ackMs = 25000, totalMs = 420000 } = {}) {
+// opts.prev: the name (briefHash) of the mockup this one follows, so the Mac can edit that photograph instead of starting over.
+// opts.onDone: told what the Mac did, for example { how: 'edit', where: 'the place it found' }.
+// A Mac that does not answer may only be asleep. The request stays alive for patienceMs: opts.onStage hears { st: 'asleep' }
+// after ackMs, and the Mac takes the request up when it wakes.
+export async function askMac(link, brief, { signal, onStage, onDone, fresh = false, prev = null, ackMs = 25000, patienceMs = 540000, totalMs = 420000 } = {}) {
   const pair = await newPair();
   const id = hex(crypto.getRandomValues(new Uint8Array(8)));
   const started = Date.now();
   const since = Math.floor(started / 1000) - 3;
-  await post(link.req, await seal(link.key, { v: 1, id, t: started, pub: pair.pub, lines: brief.lines, scene: brief.scene, fresh: !!fresh }), signal);
+  const ask = { v: 1, id, t: started, pub: pair.pub, lines: brief.lines, scene: brief.scene, fresh: !!fresh };
+  if (prev) ask.prev = prev;                                       // the mockup this one should be an edit of
+  if (brief.place) ask.place = brief.place;                        // { name, kind, when }: the place he named, for the Mac to look up
+  await post(link.req, await seal(link.key, ask), signal);
   // If the wait is called off (the fit changed), tell the Mac so it does not spend a mockup on it.
   const drop = () => { seal(link.key, { v: 1, cancel: id, t: Date.now() }).then((m) => post(link.req, m)).catch(() => {}); };
   if (signal) signal.addEventListener('abort', drop, { once: true });
-  let acked = false;
+  // a wait that ends at once when the request is called off, so a change to the fit is acted on right away
+  const nap = (ms) => new Promise((res) => {
+    if (!signal) { setTimeout(res, ms); return; }
+    const done = () => { clearTimeout(t); signal.removeEventListener('abort', done); res(); };
+    const t = setTimeout(done, ms);
+    signal.addEventListener('abort', done);
+  });
+  let acked = false, ackedAt = 0, asleep = false;
   for (;;) {
     if (signal && signal.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; throw e; }
-    await sleep(acked ? 4000 : 2500);
+    await nap(acked ? 4000 : asleep ? 8000 : 2500);
+    if (signal && signal.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; throw e; }
     let msgs = [];
     try { msgs = await read(link.res, since, signal); }
     catch (e) { if (e && e.name === 'AbortError') throw e; if (e && e.busy) await sleep(6000); }
     for (const m of msgs) {
       const s = await open(link.key, m.message);
       if (!s || s.id !== id) continue;
-      if (s.st === 'working' && !acked) { acked = true; if (onStage) onStage(s); }
+      if (s.st === 'working' && !acked) { acked = true; ackedAt = Date.now(); if (onStage) onStage(s); }
       if (s.st === 'error') throw new LinkError(s.msg || 'Your Mac could not make the mockup.', 'macerr');
       if (s.st === 'done' && m.attachment && m.attachment.url) {
         const res = await fetch(m.attachment.url, { cache: 'no-store', signal });
@@ -109,11 +131,13 @@ export async function askMac(link, brief, { signal, onStage, fresh = false, ackM
         const key = await sessionKey(pair.priv, s.pub, id);
         const plain = await openBytes(key, await res.arrayBuffer());
         if (!plain) throw new LinkError('The mockup arrived damaged. Try again.', 'relay');
+        if (onDone) onDone(s);
         return new Blob([plain], { type: 'image/jpeg' });
       }
     }
     const waited = Date.now() - started;
-    if (!acked && waited > ackMs) throw new LinkError('Your Mac is not answering. Mockups are made on your Mac with your ChatGPT plan, so it has to be awake and online. Wake it, then try again.', 'mac');
-    if (waited > totalMs) throw new LinkError('Your Mac took too long. Try again.', 'macerr');
+    if (!acked && !asleep && waited > ackMs) { asleep = true; if (onStage) onStage({ st: 'asleep' }); }
+    if (!acked && waited > patienceMs) { drop(); throw new LinkError('Your Mac is not answering. Mockups are made on your Mac with your ChatGPT plan, so it has to be awake and online. Wake it, then try again.', 'mac'); }
+    if (acked && Date.now() - ackedAt > totalMs) throw new LinkError('Your Mac took too long. Try again.', 'macerr');
   }
 }

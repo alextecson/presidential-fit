@@ -11,6 +11,54 @@ export const SCENES = {
   restaurant: { label: 'Restaurant', text: 'the entrance of an upscale restaurant in the evening' },
   street: { label: 'City street', text: 'a clean city street in soft daylight' },
 };
+// A kind of place named in the question ("the casino", "sushi", "the airport"). It becomes the backdrop when no place is named outright.
+export const SPOTS = {
+  casino: 'a casino floor with rows of slot machines, patterned carpet and warm light',
+  steakhouse: 'the dining room of a classic steakhouse with dark wood and leather booths',
+  sushi: 'a sushi restaurant with a pale wood counter',
+  buffet: 'a large hotel buffet dining room',
+  brunch: 'a bright restaurant patio set for brunch',
+  concert: 'the plaza outside a concert venue with marquee lights',
+  theater: 'a theater lobby with warm marquee lighting',
+  arena: 'the concourse of a sports arena on game night',
+  cinema: 'a cinema lobby',
+  nightclub: 'a nightclub entrance with a velvet rope',
+  festival: 'open festival grounds with stage lights in the distance',
+  cruise: 'the open deck of a cruise ship',
+  tailgate: 'a stadium parking lot tailgate',
+  wedding: 'a wedding reception venue with flowers and string lights',
+  graduation: 'a university commencement ground with rows of chairs',
+  chapel: 'the steps of a quiet chapel',
+  ballroom: 'a hotel ballroom set for a gala dinner',
+  church: 'the front steps of a church',
+  hospital: 'a bright hospital corridor',
+  clinic: 'the hallway of a medical clinic',
+  conference: 'a conference center lobby',
+  airport: 'an airport terminal concourse',
+  mall: 'the walkway of an upscale shopping mall',
+  park: 'a path in a city park',
+  beach: 'a beach boardwalk',
+  coffee: 'a coffee shop with a wooden counter',
+  diner: 'a classic diner with booths',
+  barber: 'a classic barbershop',
+  cookout: 'a backyard cookout with a grill and string lights',
+  brewery: 'a brewery taproom',
+  winery: 'a winery tasting room',
+  pub: 'a wood panelled pub',
+  speakeasy: 'a dim speakeasy bar',
+  pool: 'a pool hall with green felt tables',
+  golf: 'the terrace of a golf clubhouse with the course behind him',
+  home: 'the living room of a family home',
+};
+// The part of the day a fit is worn in, from its planned hours.
+export const WHENS = ['in the morning', 'around midday', 'in the afternoon', 'in the daytime', 'in the evening', 'at night'];
+export function partOfDay(w) {
+  if (!w || typeof w.from !== 'number') return '';
+  if (w.from >= 20 || w.from < 5) return 'at night';
+  if (w.from >= 17) return 'in the evening';
+  if (w.to - w.from >= 6) return 'in the daytime';
+  return w.from < 11 ? 'in the morning' : w.from < 14 ? 'around midday' : 'in the afternoon';
+}
 // Personal settings (a city, a car) come from the private closet file, not from this code.
 export const scenesFor = (profile) => Object.assign({}, SCENES, (profile && profile.scenes) || {});
 
@@ -31,14 +79,45 @@ function pieceLine(r) {
 }
 
 // The brief for one fit: what he wears, line by line, and where he stands. Plain text only, so it can be sent to his Mac as is.
-export function briefFor(o, items, profile, sceneKey = 'auto') {
+// place = { venue, spot, when }: the place he named, or the kind of place, and the part of the day. It becomes the backdrop.
+export function briefFor(o, items, profile, sceneKey = 'auto', place = null) {
   const rs = rows(o, items);
   const lines = rs.map(pieceLine).filter(Boolean);
   const belt = rs.find((r) => r.slot === 'belt');
   if (belt && !belt.item) lines.push('BELT: none');
   const all = scenesFor(profile);
-  const scene = sceneKey !== 'auto' && all[sceneKey] ? all[sceneKey].text : (OCCASIONS[o.occ] || OCCASIONS.casual).scene;
+  let scene = sceneKey !== 'auto' && all[sceneKey] ? all[sceneKey].text : (OCCASIONS[o.occ] || OCCASIONS.casual).scene;
+  if (place && sceneKey === 'auto') {
+    const when = place.when ? ', ' + place.when : '';
+    const kind = SPOTS[place.spot] || '';
+    if (place.venue) {
+      const where = place.venue + (profile && profile.city && !place.venue.toLowerCase().includes(profile.city.toLowerCase()) ? ' in ' + profile.city : '');
+      scene = `${where}${when}, shown as that place really looks. If you do not know the place, use ${kind || scene}`;
+    } else if (kind) scene = kind + when;
+  }
   return { lines, scene };
+}
+// What differs between two briefs, slot by slot.
+export function diffLines(before, after) {
+  const map = (ls) => new Map((ls || []).map((l) => { const i = l.indexOf(': '); return [l.slice(0, i), l.slice(i + 2)]; }));
+  const a = map(before), b = map(after);
+  const changed = [], gone = [];
+  for (const [k, v] of b) if (a.get(k) !== v) (v === 'none' ? gone : changed).push(v === 'none' ? k : `${k}: ${v}`);
+  for (const k of a.keys()) if (!b.has(k) && a.get(k) !== 'none') gone.push(k);
+  return { changed, gone };
+}
+// The brief for a change to a fit that already has a mockup: the same photograph, with only the changed pieces replaced.
+export function editPromptFrom(before, after) {
+  const d = diffLines(before, after);
+  return [
+    'Edit the first attached photo. It is a finished photograph of a man in an outfit. The second attached photo shows the same man and is only a reference for his face.',
+    'Keep the photograph as it is: the same man, the same face, the same pose, the same framing, the same background and the same lighting. He must stay instantly recognizable as the same person.',
+    ...(d.changed.length ? ['Change only these pieces of his outfit:', ...d.changed.map((l) => '- ' + l)] : []),
+    ...(d.gone.length ? ['Take these off. He no longer wears them:', ...d.gone.map((l) => '- ' + l)] : []),
+    'Every other garment stays exactly as it is in the photo. For reference, the complete outfit after the change:',
+    ...after.map((l) => '- ' + l),
+    'Fit: slim but not skinny, clothes pressed and lint free. Head to toe including the shoes. No text, no watermark, no extra people, no added logos.',
+  ].join('\n');
 }
 export function promptFrom(lines, scene, photoCount = 1) {
   const who = photoCount > 1 ? `the man shown in the first ${photoCount} reference photos` : 'the man shown in the first reference photo';
@@ -54,8 +133,8 @@ export function promptFrom(lines, scene, photoCount = 1) {
     'Framing: vertical, head to toe including the shoes, standing naturally, relaxed posture, eye level camera, 50mm lens look, natural light, true to life color. No text, no watermark, no extra people, no added logos.',
   ].join('\n');
 }
-export function buildPrompt(o, items, profile, sceneKey = 'auto', photoCount = 1) {
-  const b = briefFor(o, items, profile, sceneKey);
+export function buildPrompt(o, items, profile, sceneKey = 'auto', photoCount = 1, place = null) {
+  const b = briefFor(o, items, profile, sceneKey, place);
   return promptFrom(b.lines, b.scene, photoCount);
 }
 

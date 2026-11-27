@@ -7,7 +7,7 @@ import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
 import { parseAsk, windowFor } from './ask.js';
 import * as L from './link.js';
 
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -130,7 +130,7 @@ function respond(before, latest) {
   const occ = E.OCCASIONS[ui.occ] || E.OCCASIONS.casual;
   const w = win(), t = today(), late = !!w && w.from >= 17;
   const when = ui.date === t ? (late ? 'tonight' : 'today') : ui.date === E.addDays(t, 1) ? (late ? 'tomorrow night' : 'tomorrow') : 'on ' + E.fmtDate(ui.date, { weekday: 'long', month: 'short', day: 'numeric' });
-  const what = (occ.teach ? 'class with the ' + groupLabel(occ.group) : ui.occ === 'dressy' ? 'a special occasion' : E.sayOf(ui.occ)) + (p.venue ? ' at ' + p.venue : '');
+  const what = (occ.teach ? 'class with the ' + groupLabel(occ.group) : ui.occ === 'dressy' ? 'a special occasion' : E.sayOf(ui.occ)) + (p.venue && !p.venueOff && !p.venueSoft ? ' at ' + p.venue : '');
   const also = (p.also || []).filter((k) => E.OCCASIONS[k] && k !== ui.occ).map(E.sayOf);
   const plan = `${what} ${when}${w ? `, ${E.hourLabel(w.from)} to ${E.hourLabel(w.to)}` : ''}${also.length ? ', then ' + E.listAnd(also) : ''}.`;
   // what one message asked for, said back
@@ -174,15 +174,18 @@ function respond(before, latest) {
     const undone = !!p.undo;
     if (p.undo) { out.push(`Took back \u201c${p.undo}\u201d.`); delete p.undo; }
     for (const n of latest.notes || []) if (n.k === 'missing') out.push(n.t);
-    if (diff) out.push(undone && /^Nothing changed/.test(diff) ? 'The fit stays as it is.' : diff);
+    const movedTo = latest.venue && !latest.wore && p.venue && !p.venueOff && !p.venueSoft ? p.venue : '';     // this message named a new place
+    if (diff && !(movedTo && /^Nothing changed/.test(diff))) out.push(undone && /^Nothing changed/.test(diff) ? 'The fit stays as it is.' : diff);
     out.push(...tell(latest, fresh));
     if (latest.wore && before) out.push('Noted that you already wore that one, so its pieces stay out.');
+    if (movedTo) out.push(`Moved to ${movedTo}.${staged() ? ' The mockup is staged there.' : ''}`);
     if (ui.relaxed && !c.logged) out.push(ui.relaxed);
     out.push(`Still ${plan}`);
     p.reply = out; p.diff = '';
     return;
   }
   if (p.text) out.push(up(plan));
+  if (staged()) out.push('The mockup is staged there.');
   for (const n of p.notes || []) if (n.k !== 'avoid') out.push(n.t);
   out.push(...tell(p));
   const worn = p.worn || [];
@@ -194,6 +197,7 @@ function respond(before, latest) {
   p.reply = out; p.diff = diff;
 }
 const dropDiff = () => { if (ui.ask) ui.ask.diff = ''; };
+const PLACE_KEYS = ['venue', 'venueSoft', 'venueHome', 'venueOff', 'spot'];
 // The answer to the opening question becomes the brief for the fit.
 async function answer(text, over = {}) {
   const p = parseAsk(text, { today: today(), date: over.date || null, fixDate: !!over.fixDate, items: st().items, profile: st().profile, now: new Date() });
@@ -211,6 +215,12 @@ async function answer(text, over = {}) {
     else p.notes.unshift({ k: 'occ', t: 'No occasion named, so this is a casual day. Tap it to change.' });
   }
   p.also = (p.also || []).filter((k) => k !== p.occ);
+  if (over.steps && over.steps.length) {                           // where it is: the first message says, and a later one that names a place moves it
+    const f = parseAsk(over.first || '', { today: today(), date: p.date, fixDate: true, items: st().items, profile: st().profile, now: new Date() });
+    for (const k of PLACE_KEYS) p[k] = f[k];
+    const moved = over.steps.map((x) => x.place).filter(Boolean).pop();
+    if (moved) Object.assign(p, moved);
+  }
   if (over.label) p.label = over.label;
   if (over.avoid && over.avoid.length) {                          // "change it": what was on screen stays out of the next fit
     p.avoid = [...new Set(over.avoid)];
@@ -242,7 +252,8 @@ async function answer(text, over = {}) {
   window.scrollTo(0, 0);
 }
 // While a new mockup is made for a changed fit, the last one stays on screen instead of a blank.
-function keepMock() { const c = current(); const mk = c.o ? mockFor(c.o) : null; if (mk) ui.prevMock = mk.blob; }
+// It is also the photograph the Mac edits, so a change to the fit is a change to the same picture.
+function keepMock() { const c = current(); const mk = c.o ? mockFor(c.o) : null; if (mk) ui.prevMock = { blob: mk.blob, bh: mk.bh || null }; }
 // Words in the Change box that mean "not what is on screen": the whole fit, or one named piece of it.
 const CHANGE_ALL = /\b(change it|change this|change (?:the |this |my )?(?:fit|look|outfit)|something else|something different|(?:a )?different (?:fit|look|outfit|one)|another (?:one|fit|look|outfit)|not this|(?:a )?new (?:one|fit|look|outfit)|switch it up|start over|i (?:already )?wore (?:this|that|it)|wore (?:this|that|it)|worn (?:this|that|it))\b/;
 const CHANGE_ONE = /\b(?:change|different|another|other|swap|switch|new|replace|lose|drop)(?: out)?(?: the| my| that| those| these| a| an)? (jackets?|blazers?|suits?|coats?|shirts?|tops?|polos?|sweaters?|tees?|pants|trousers|jeans|slacks|chinos|shoes|loafers|sneakers|belts?|watch(?:es)?|hats?|socks|glasses)\b/g;
@@ -261,16 +272,46 @@ function avoidFrom(text, o, prior) {
   return { ids: [...out], one, whole: slots.size > 0 && !one, slots: [...slots] };   // one: a single piece was named. whole: the fit as a whole should change
 }
 function openDay(date, occ, extra) {
+  ui.prevMock = null;
   ui.ask = blankAsk(date, occ, extra); ui.date = date; ui.occ = occ; ui.locks = {}; ui.idx = 0; ui.editing = !!(extra && extra.editing); ui.askDay = today();
   ui.mode = 'fit'; ui.tab = 'fit'; closeSheet();
   return present();
 }
 function backToAsk() { ui.mode = 'ask'; ui.ask = null; ui.draft = ''; ui.refineDraft = ''; ui.prevMock = null; ui.when = null; ui.date = today(); ui.occ = null; ui.locks = {}; ui.results = []; ui.editing = false; ui.loading = ''; }
-function mockKey(o) { return E.signature(o); }
-function mockFor(o) { const m = (st().mockups || {})[mockKey(o)]; return m || null; }
+// Where the fit is going, when he said: the place he named, or the kind of place. It is the backdrop of the mockup,
+// so the same fit at two places is two pictures.
+function placeOf() {
+  const a = ui.ask;
+  if (ui.mode !== 'fit' || !a || (st().settings.setting || 'auto') !== 'auto') return null;
+  const venue = a.venue && !a.venueOff && !a.venueHome ? a.venue : '';
+  const spot = a.venueHome ? (a.venueOff ? '' : 'home') : (a.spot || '');
+  if (!venue && !spot) return null;
+  const w = windowFor(Object.assign({}, a, { occ: ui.occ }), ui.date, new Date(ui.date + 'T00:00:00'));     // the planned hours, not what is left of them
+  return { venue, spot, soft: !!a.venueSoft, when: M.partOfDay(w), tag: (venue || spot).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() };
+}
+const staged = () => { const p = placeOf(); return !!(p && p.venue && !p.soft && maker()); };
+const KIND_WORD = { work: 'work', dinner: 'dinner', lounge: 'drinks', bar: 'drinks', event: 'an event', dressy: 'a special occasion', casual: 'a casual day' };
+function mockKey(o) { const p = placeOf(); return E.signature(o) + (p && p.tag ? '@' + p.tag : ''); }
+// The stored mockup for the fit on screen, with the name it is stored under.
+function mockEntry(o) {
+  const all = st().mockups || {}, p = placeOf(), sig = E.signature(o), key = mockKey(o);
+  if (all[key]) return [key, all[key]];
+  if (p && p.tag) return null;                                     // a place was named: only a picture set there will do
+  let best = null;                                                 // no place named (a fit opened from the log, say): any picture of this fit, newest first
+  for (const k of Object.keys(all)) if (k.startsWith(sig + '@') && (!best || (all[k].at || 0) > (best[1].at || 0))) best = [k, all[k]];
+  return best;
+}
+function mockFor(o) { const e = mockEntry(o); return e ? e[1] : null; }
+// Any picture of this fit, wherever it was set: shown dimmed while the one for this place is made.
+function anyMock(o) {
+  const all = st().mockups || {}, sig = E.signature(o);
+  let best = all[sig] || null;
+  for (const k of Object.keys(all)) if (k.startsWith(sig + '@') && (!best || (all[k].at || 0) > (best.at || 0))) best = all[k];
+  return best;
+}
 // The fit is shown as a ChatGPT mockup of the wearer, not a sketch. With a key saved the app makes it by itself.
 const auto = { timer: null, busy: null, ctl: null, failed: new Map(), retried: new Set() };
-const AUTO_CAP = 20, AUTO_DWELL = 2200;
+const AUTO_CAP = 30, AUTO_DWELL = 2200;
 // Who makes the mockup: ChatGPT through the wearer's own OpenAI key, or ChatGPT on the wearer's own Mac (js/link.js).
 const maker = () => (ui.hasKey ? 'key' : (ui.link && st().settings.linkSeen ? 'mac' : null));
 // Look for the Mac once in a while until it has been seen. After that it is asked directly.
@@ -294,17 +335,24 @@ function photoState(o, mk) {
 }
 // One request to ChatGPT's image engine for one fit, saved against that fit when it comes back.
 async function createMockup(o, opts = {}) {
-  if (maker() !== 'mac') return createWithKey(o, opts);
-  // The Mac holds the reference photo and the ChatGPT sign in. The phone sends only the list of pieces, sealed.
+  const key = mockKey(o), place = placeOf();                       // fixed now: the fit and the place may change while ChatGPT works
+  if (maker() !== 'mac') return createWithKey(o, opts, key, place);
+  // The Mac holds the reference photo and the ChatGPT sign in. The phone sends only the list of pieces and the setting, sealed.
   let lock = null;
   try { if (navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); } catch (e) { /* the screen may dim; the wait goes on */ }
   try {
-    const blob = await L.askMac(ui.link, M.briefFor(o, st().items, st().profile, st().settings.setting || 'auto'), opts);
-    await saveMock(o, blob, 'ChatGPT on your Mac');
+    const brief = M.briefFor(o, st().items, st().profile, st().settings.setting || 'auto', place);
+    const bh = await L.briefHash(brief.lines, brief.scene);
+    if (place && place.venue) brief.place = { name: place.venue, kind: (E.OCCASIONS[o.occ] || {}).teach ? 'class' : KIND_WORD[o.occ] || '', when: place.when };
+    // a change to a fit that already has a mockup is made to that same photograph
+    const prev = !opts.fresh && ui.prevMock && ui.prevMock.bh && ui.prevMock.bh !== bh ? ui.prevMock.bh : null;
+    let did = {};
+    const blob = await L.askMac(ui.link, brief, Object.assign({}, opts, { prev, onDone: (d) => { did = d || {}; } }));
+    await saveMock(o, blob, 'ChatGPT on your Mac', { key, bh, where: did.where || '', miss: !!did.miss && !!(place && place.venue && !place.soft), place: place ? place.venue : '' });
     return { blob, model: 'mac' };
   } finally { if (lock) lock.release().catch(() => {}); }
 }
-async function createWithKey(o, { signal, onStage } = {}) {
+async function createWithKey(o, { signal, onStage } = {}, mkKey, place) {
   const key = await S.secretGet('openai');
   if (!key) throw new M.MockupError('Add your OpenAI key in More first.', 'auth');
   const photos = (st().modelPhotos || []).slice(0, 3);
@@ -314,14 +362,14 @@ async function createWithKey(o, { signal, onStage } = {}) {
   for (const id of [o.suit || (o.jacket !== 'none' ? o.jacket : null), o.top, o.suit ? null : o.bottom, o.shoes].filter(Boolean)) {
     const it = item(id); if (it && it.photo && imgs.length < 8) { const b = await S.blobGet(it.photo); if (b) imgs.push(b); }
   }
-  const prompt = M.buildPrompt(o, st().items, st().profile, st().settings.setting || 'auto', photos.length);
+  const prompt = M.buildPrompt(o, st().items, st().profile, st().settings.setting || 'auto', photos.length, place);
   let hidden = document.visibilityState === 'hidden', lock = null;
   const seen = () => { if (document.visibilityState === 'hidden') hidden = true; };
   document.addEventListener('visibilitychange', seen);
   try { if (navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); } catch (e) { /* the screen may dim; the request still runs */ }
   try {
     const out = await M.generate({ key, model: st().settings.model, quality: st().settings.quality, prompt, images: imgs, signal, onModel: onStage });
-    await saveMock(o, out.blob, out.model);
+    await saveMock(o, out.blob, out.model, { key: mkKey, place: place ? place.venue : '' });
     return out;
   } catch (e) {
     if (e instanceof M.MockupError && e.kind === 'network' && hidden) throw new M.MockupError('The app went to the background while ChatGPT was working. Keep it open for about a minute.', 'paused');
@@ -361,13 +409,13 @@ async function runAuto(sig, forced) {
   auto.busy = sig; auto.ctl = new AbortController(); auto.failed.delete(sig);
   if (!forced) { const used = AUTO_CAP - autoLeft(); st().settings.autoDay = { d: today(), n: used + 1 }; S.save(); }
   settle();
-  try { await createMockup(o, { signal: auto.ctl.signal }); }
+  try { await createMockup(o, { signal: auto.ctl.signal, onStage: (s) => { const z = !!(s && s.st === 'asleep'); if (auto.asleep !== z) { auto.asleep = z; settle(); } } }); }
   catch (e) {
     if (e instanceof M.MockupError && e.kind === 'paused' && !auto.retried.has(sig)) auto.retried.add(sig);      // one more try once the app is back in front
     else if (e && e.name === 'AbortError' && auto.moved) { /* called off because the fit changed */ }
     else auto.failed.set(sig, e && e.name === 'AbortError' ? 'Stopped.' : (e && e.message) || 'That did not work.');
   }
-  auto.moved = false;
+  auto.moved = false; auto.asleep = false;
   auto.busy = null; auto.ctl = null;
   settle();
 }
@@ -398,7 +446,7 @@ let sessionTimer = null;
 function saveSession() {
   clearTimeout(sessionTimer);
   sessionTimer = setTimeout(() => {
-    const snap = ui.mode === 'fit' && ui.ask && !ui.loading ? { at: Date.now(), ask: ui.ask, date: ui.date, occ: ui.occ, locks: ui.locks, idx: ui.idx, editing: ui.editing, relaxed: ui.relaxed, tab: ui.tab, fits: ui.results.map((r) => ({ o: r.o, why: r.why })) } : null;
+    const snap = ui.mode === 'fit' && ui.ask && !ui.loading ? { at: Date.now(), ask: ui.ask, date: ui.date, occ: ui.occ, locks: ui.locks, idx: ui.idx, editing: ui.editing, relaxed: ui.relaxed, tab: ui.tab, prev: ui.prevMock, fits: ui.results.map((r) => ({ o: r.o, why: r.why })) } : null;
     S.kvSet('session', snap).catch(() => {});
   }, 300);
 }
@@ -461,9 +509,9 @@ function viewAsk() {
   return `<section class="ask">
       <div class="eyebrow">${esc(E.fmtDate(t, { weekday: 'long', month: 'long', day: 'numeric' }))}</div>
       <h1>What is the fit for?</h1>
-      <textarea id="askBox" class="askbox" rows="3" data-in="askText" data-enter="askGo" enterkeyhint="go" placeholder="Dinner tonight, then drinks" autocomplete="off">${esc(ui.draft)}</textarea>
+      <textarea id="askBox" class="askbox" rows="3" data-in="askText" data-enter="askGo" enterkeyhint="go" placeholder="Dinner at Marios tonight, then drinks" autocomplete="off">${esc(ui.draft)}</textarea>
       <button class="btn primary" data-act="askGo">Get my fit</button>
-      <p class="fine">Say where and when, and anything you want in it. Monday class with the fedora. No jeans. More casual.</p>
+      <p class="fine">Say where and when, and anything you want in it. Name the place and the mockup is staged there. Monday class with the fedora. No jeans. More casual.</p>
     </section>
     <section class="sec"><h3>Or tap one</h3>
       <div class="seg" role="group" aria-label="Day">${quick.map(([d, l]) => `<button class="${d === when ? 'on' : ''}" data-act="askWhen" data-date="${d}">${l}</button>`).join('')}
@@ -496,7 +544,7 @@ function askBar() {
     </div>
     ${changes.length ? `<div class="changes"><h3>Your changes <span>${changes.length}</span></h3><div class="chips wrap">${changes.join('')}</div></div>` : ''}
     ${(a.reply || []).length || a.diff ? `<p class="reply">${esc((a.reply || []).concat(a.diff ? [a.diff] : []).join(' '))}</p>` : ((a.notes || []).length ? `<ul class="notes">${a.notes.map((n) => `<li>${esc(n.t)}</li>`).join('')}</ul>` : '')}
-    <div class="refine"><input type="text" id="refineBox" data-in="refineText" data-enter="refine" enterkeyhint="go" placeholder="Change something" aria-label="Change something about this fit" autocomplete="off" value="${esc(ui.refineDraft)}"><button class="btn small" data-act="refine">Go</button></div>
+    <div class="refine"><input type="text" id="refineBox" data-in="refineText" data-enter="refine" enterkeyhint="go" placeholder="Change a piece or the place" aria-label="Change something about this fit, or name the place" autocomplete="off" value="${esc(ui.refineDraft)}"><button class="btn small" data-act="refine">Go</button></div>
     <div class="actions"><button class="btn small" data-act="refreshFit">Refresh</button><button class="btn small" data-act="askAgain">Start over</button></div>
   </div>`;
 }
@@ -518,15 +566,22 @@ function verifiedLine(checks) {
 }
 // The top of the fit: the ChatGPT mockup, or what stands between the wearer and having one.
 function photoSlot(o, mk, ph) {
-  if (ph.kind === 'photo') return `<div class="photo" data-act="mockup"><img data-blob="${esc(mk.blob)}" alt="Mockup of this fit on you"><span class="visual-tag">ChatGPT mockup</span></div>`;
+  if (ph.kind === 'photo') {
+    const set = mk.where ? `<p class="fine setat">Set at ${esc(mk.where)}, as ChatGPT found it.</p>` : mk.miss && mk.place ? `<p class="fine setat">ChatGPT could not find ${esc(mk.place)}, so the backdrop is a stand in. Name the place another way in the box above to try again.</p>` : '';
+    return `<div class="photo" data-act="mockup"><img data-blob="${esc(mk.blob)}" alt="Mockup of this fit on you"><span class="visual-tag">ChatGPT mockup</span></div>${set}`;
+  }
   if (ph.kind === 'making' || ph.kind === 'queued') {
-    const me = ui.prevMock || (st().modelPhotos || [])[0];
-    return `<div class="photo making${ui.prevMock ? ' prev' : ''}" data-act="mockup">${me ? `<img data-blob="${esc(me)}" alt="">` : ''}<div class="making-text"><div class="spinner"></div><b>${ui.prevMock ? 'Updating your mockup with the change' : 'ChatGPT is dressing you in this fit'}</b><span>${maker() === 'mac' ? 'Made on your Mac. About a minute. Keep the app open.' : 'About a minute. Keep the app open.'}</span></div></div>`;
+    const changed = !!(ui.prevMock && ui.prevMock.blob);                       // a change is being made to the picture that was on screen
+    const old = changed ? ui.prevMock.blob : (anyMock(o) || {}).blob, me = old || (st().modelPhotos || [])[0];
+    const pl = placeOf(), at = pl && pl.venue && !pl.soft ? pl.venue : '';
+    if (auto.asleep && ph.kind === 'making') return `<div class="photo making${old ? ' prev' : ''}" data-act="mockup">${me ? `<img data-blob="${esc(me)}" alt="">` : ''}<div class="making-text"><div class="spinner"></div><b>Your Mac is not answering</b><span>It may be asleep. Wake it and this mockup arrives by itself. Trying for a few more minutes.</span></div></div>`;
+    return `<div class="photo making${old ? ' prev' : ''}" data-act="mockup">${me ? `<img data-blob="${esc(me)}" alt="">` : ''}<div class="making-text"><div class="spinner"></div><b>${changed ? 'Updating your mockup with the change' : at ? `ChatGPT is putting you at ${esc(at)} in this fit` : 'ChatGPT is dressing you in this fit'}</b><span>${maker() === 'mac' ? 'Made on your Mac. About a minute. Keep the app open.' : 'About a minute. Keep the app open.'}</span></div></div>`;
   }
   const box = (title, text, buttons) => `<div class="photo-setup"><b>${title}</b><span>${text}</span><div class="actions wrap">${buttons}</div></div>`;
   const app = '<button class="btn small" data-act="mockup">Use the ChatGPT app</button>';
   if (ph.kind === 'nophoto') return box('Your ChatGPT mockup goes here', 'First add a full length photo of yourself. ChatGPT uses it to put each fit on you.', '<button class="btn primary small" data-act="addPhoto">Add my photo</button>');
   if (ph.kind === 'nokey') return box('Your ChatGPT mockup goes here', 'One step is left, and only you can do it: add your OpenAI key. After that every fit arrives as a photo of you instead of a sketch.', `<button class="btn primary small" data-act="setupKey">Add my key</button>${app}`);
+  if (ph.kind === 'error' && ph.msg === 'Stopped.') return box('Mockup stopped', 'You stopped this one. It is made when you ask.', `<button class="btn primary small" data-act="retryAuto">Create my mockup</button>${app}`);
   if (ph.kind === 'error') return box(/Mac is not answering/.test(ph.msg || '') ? 'Your Mac is not answering' : 'ChatGPT did not return the mockup', esc((ph.msg || '').replace(/^Your Mac is not answering\. /, '')), `<button class="btn primary small" data-act="retryAuto">Try again</button>${app}`);
   if (ph.kind === 'offline') return box('No connection', 'The mockup is made as soon as you are back online.', '<button class="btn primary small" data-act="retryAuto">Try now</button>');
   if (ph.kind === 'cap') return box('Automatic mockups are done for today', `${AUTO_CAP} were made by themselves today. This one is made when you ask.`, '<button class="btn primary small" data-act="retryAuto">Create my mockup</button>');
@@ -737,7 +792,7 @@ function sheetMockup(s) {
   const mk = mockFor(c.o);
   const photos = st().modelPhotos || [];
   const sceneSel = `<label class="field"><span>Setting</span><select data-in="scene">${Object.entries(M.scenesFor(st().profile)).map(([k, v]) => `<option value="${k}"${(st().settings.setting || 'auto') === k ? ' selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label>`;
-  if (ui.busy || auto.busy === mockKey(c.o)) return `<h2>Putting it on you</h2><div class="busy"><div class="spinner"></div><p>${esc(ui.busy || 'ChatGPT is dressing you')}</p><p class="fine">This takes about a minute. Keep the app open.</p></div><div class="actions"><button class="btn" data-act="cancelMockup">Cancel</button></div>`;
+  if (ui.busy || auto.busy === mockKey(c.o)) return `<h2>Putting it on you</h2><div class="busy"><div class="spinner"></div><p>${esc(ui.busy || (auto.asleep ? 'Your Mac is not answering. Wake it and this carries on by itself.' : 'ChatGPT is dressing you'))}</p><p class="fine">${auto.asleep ? 'It keeps trying for a few more minutes.' : 'This takes about a minute. Keep the app open.'}</p></div><div class="actions"><button class="btn" data-act="cancelMockup">Cancel</button></div>`;
   const by = maker();
   if (!photos.length && by !== 'mac') return `<h2>See it on you</h2><p>First add a full length photo of yourself. It stays on this phone and is sent to ChatGPT only when you ask for a mockup.</p><div class="actions"><button class="btn primary" data-act="addPhoto">Add my photo</button></div>`;
   return `<h2>${mk ? 'Your mockup' : 'See it on you'}</h2>
@@ -751,7 +806,7 @@ function sheetMockup(s) {
       <button class="btn" data-act="attachMock">Add the finished image from Photos or Files</button>
     </div>
     <p class="fine">${by === 'key' ? 'Created in the app with your OpenAI key.' : by === 'mac' ? 'Made on your Mac with your ChatGPT plan and sent here encrypted. Your Mac has to be awake.' : 'Without a key: your photo opens in the share sheet and the prompt is copied. Pick ChatGPT, paste, send. Hold the image it makes, choose Copy, come back and tap Paste. Add your OpenAI key in More and none of this is needed.'}</p>
-    <details class="prompt"><summary>Show the prompt</summary><pre>${esc(M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', Math.min(photos.length, 3)))}</pre><button class="btn small" data-act="copyPrompt">Copy prompt</button></details>`;
+    <details class="prompt"><summary>Show the prompt</summary><pre>${esc(M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', Math.min(photos.length, 3), placeOf()))}</pre><button class="btn small" data-act="copyPrompt">Copy prompt</button></details>`;
 }
 function sheetPaste() {
   return `<h2>Paste setup text</h2><p class="fine">Paste the closet text you were given, then tap Load.</p>
@@ -801,7 +856,8 @@ const A = {
     const touched = new Set(av.slots.concat(Object.keys(probe.locks), Object.keys(probe.allow)));
     for (const k of Object.keys(ui.locks)) if (av.whole || probe.wore || touched.has(k) || avoid.includes(ui.locks[k])) delete ui.locks[k];
     if (probe.occSaid) return answer(v, { date: ui.date, editing: true, avoid, worn, prefer, before: now });    // a new occasion is a new question, same day unless a day is named
-    const steps = (a.steps || []).concat([{ t: v, avoid: avoid.filter((id) => !(a.avoid || []).includes(id)), worn: worn.filter((id) => !(a.worn || []).includes(id)) }]);
+    const place = probe.venue && !probe.wore ? { venue: probe.venue, venueSoft: !!probe.venueSoft, venueHome: !!probe.venueHome, venueOff: false, spot: probe.venueHome ? 'home' : (a.venueHome ? '' : a.spot || '') } : null;
+    const steps = (a.steps || []).concat([Object.assign({ t: v, avoid: avoid.filter((id) => !(a.avoid || []).includes(id)), worn: worn.filter((id) => !(a.worn || []).includes(id)) }, place ? { place } : {})]);
     const first = a.first != null ? a.first : a.text;
     return answer([first].concat(steps.map((x) => x.t)).filter(Boolean).join('. '), { date: probe.dateSaid ? probe.date : ui.date, fixDate: true, occ: ui.occ, forceOcc: true, also: a.also, editing: true, label: a.label, avoid, worn, prefer, before: now, latest: probe, steps, first, base: a.base || { avoid: [], worn: [] }, keepLocks: true });
   },
@@ -931,7 +987,7 @@ const A = {
   },
   clearKey: async () => { await S.secretSet('openai', null); ui.hasKey = false; render(); toast('Key removed.'); },
   mockup: () => { if (current().o) openSheet({ type: 'mockup' }); },
-  copyPrompt: async () => { const c = current(); const ok = await M.copyText(M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', Math.min((st().modelPhotos || []).length, 3))); toast(ok ? 'Prompt copied.' : 'Could not copy.'); },
+  copyPrompt: async () => { const c = current(); const ok = await M.copyText(M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', Math.min((st().modelPhotos || []).length, 3), placeOf())); toast(ok ? 'Prompt copied.' : 'Could not copy.'); },
   makeMockup: async () => {
     const c = current(); if (!c.o) return;
     if (!maker()) { toast('Add your OpenAI key in More.'); return; }
@@ -939,7 +995,7 @@ const A = {
     const again = !!mockFor(c.o);
     ui.abort = new AbortController(); ui.busy = 'Sending your photo and the fit to ChatGPT'; ui.busySig = mockKey(c.o); renderSheet();
     try {
-      await createMockup(c.o, { signal: ui.abort.signal, fresh: again, onStage: () => { ui.busy = 'ChatGPT is dressing you'; renderSheet(); } });
+      await createMockup(c.o, { signal: ui.abort.signal, fresh: again, onStage: (s) => { ui.busy = s && s.st === 'asleep' ? 'Your Mac is not answering. Wake it and this carries on by itself.' : 'ChatGPT is dressing you'; renderSheet(); } });
       ui.busy = null; auto.failed.delete(mockKey(c.o)); render(); openSheet({ type: 'mockup' });
     } catch (e) {
       ui.busy = null;
@@ -966,14 +1022,14 @@ const A = {
   handOff: async () => {
     const c = current(); if (!c.o) return;
     const photos = st().modelPhotos || [];
-    const prompt = M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', 1);
+    const prompt = M.buildPrompt(c.o, st().items, st().profile, st().settings.setting || 'auto', 1, placeOf());
     const b = photos.length ? await S.blobGet(photos[0]) : null;
     const r = await M.handOff(prompt, b);
     if (r.shared) toast('Prompt copied. In ChatGPT, paste and send.', 5000);
     else if (!r.cancelled) toast(r.copied ? 'Prompt copied. Open ChatGPT, attach your photo, paste, send.' : 'Copy the prompt below, then open ChatGPT.', 6000);
   },
   attachMock: async () => { const c = current(); const [f] = await pickFile('image/*'); if (!f || !c.o) return; const b = await M.downscale(f, 1536, 0.92); await saveMock(c.o, b, 'ChatGPT app'); auto.failed.delete(mockKey(c.o)); render(); openSheet({ type: 'mockup' }); toast('Mockup added.'); },
-  delMock: async () => { const c = current(); const mk = mockFor(c.o); if (!mk) return; await S.blobDel(mk.blob); delete st().mockups[mockKey(c.o)]; S.save(); render(); openSheet({ type: 'mockup' }); },
+  delMock: async () => { const c = current(); const e = c.o ? mockEntry(c.o) : null; if (!e) return; await S.blobDel(e[1].blob); delete st().mockups[e[0]]; S.save(); render(); openSheet({ type: 'mockup' }); },
   shareMock: async () => {
     const mk = mockFor(current().o); if (!mk) return; const b = await S.blobGet(mk.blob);
     const file = new File([b], 'presidential-fit-' + ui.date + '.jpg', { type: b.type });
@@ -1007,13 +1063,18 @@ const A = {
   erase: () => openSheet({ type: 'confirm', title: 'Erase everything on this phone?', text: 'Closet, log, photos, mockups and the key are removed. Back up first if you want to keep them.', yes: 'Erase', run: async () => { for (const k of await S.blobKeys()) await S.blobDel(k); await S.secretSet('openai', null); ui.hasKey = false; await S.replaceState(S.EMPTY_STATE()); E.configure(st().profile); backToAsk(); } }),
 };
 function omit(obj, k) { const o = Object.assign({}, obj); delete o[k]; return o; }
-async function saveMock(o, blob, model) {
+// extra: { key, bh, where, miss, place }. key is the name the request was made under; bh names the picture on the Mac so the
+// next change can be made to it; where is the place ChatGPT found; place is the place as he named it.
+async function saveMock(o, blob, model, extra = {}) {
   st().mockups = st().mockups || {};
-  const key = mockKey(o); const old = st().mockups[key];
+  const key = extra.key || mockKey(o); const old = st().mockups[key];
   const id = 'mock:' + S.uid('m');
   await S.blobPut(id, blob);
-  if (old) await S.blobDel(old.blob);
-  st().mockups[key] = { blob: id, at: Date.now(), model, date: o.date, occ: o.occ };
+  const rec = { blob: id, at: Date.now(), model, date: o.date, occ: o.occ };
+  for (const k of ['bh', 'where', 'place']) if (extra[k]) rec[k] = extra[k];
+  if (extra.miss) rec.miss = true;
+  if (old) { await S.blobDel(old.blob); if (ui.prevMock && ui.prevMock.blob === old.blob) ui.prevMock = { blob: id, bh: rec.bh || ui.prevMock.bh }; }
+  st().mockups[key] = rec;
   await S.save(true);
 }
 async function doImport(obj) {
@@ -1073,7 +1134,7 @@ async function boot() {
   // The fit that was open comes back exactly as it was left, however long ago. Only Start over returns to the question.
   const snap = await S.kvGet('session').catch(() => null);
   if (snap && snap.ask && E.OCCASIONS[snap.occ] && st().items.length) {
-    Object.assign(ui, { mode: 'fit', ask: snap.ask, date: snap.date, occ: snap.occ, locks: snap.locks || {}, editing: !!snap.editing, relaxed: snap.relaxed || '', tab: snap.tab || 'fit' });
+    Object.assign(ui, { mode: 'fit', ask: snap.ask, date: snap.date, occ: snap.occ, locks: snap.locks || {}, editing: !!snap.editing, relaxed: snap.relaxed || '', tab: snap.tab || 'fit', prevMock: snap.prev && snap.prev.blob ? snap.prev : null });
     // the same fits come back, not a new pick
     if (Array.isArray(snap.fits) && snap.fits.length) { ui.results = snap.fits.filter((f) => f && f.o && item(f.o.top) && item(f.o.shoes)).map((f) => ({ score: 0, o: f.o, why: f.why || [], checks: [], flags: [] })); reaudit(); }
     else recompute();
