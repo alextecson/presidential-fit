@@ -11,7 +11,7 @@ import * as P from './place.js';
 import * as O from './openai.js';
 import * as J from './judge.js';
 
-const VERSION = '1.10.0';
+const VERSION = '1.10.1';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').

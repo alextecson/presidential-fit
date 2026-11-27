@@ -556,7 +556,8 @@ export function audit(ctx, o) {
   if (belt && belt.metal && metal && belt.metal !== metal) off.push(`the ${belt.metal} buckle`);
   if (glasses && glasses.metal && metal && !(metal === 'gold' ? ['gold', 'tortoise'].includes(glasses.metal) : glasses.metal === metal)) off.push(`the ${nm(glasses)}`);
   if (shoes.metal && metal && shoes.metal !== metal) off.push(`the ${shoes.metal} hardware on the shoes`);
-  if (off.length) add('Metals', 'bad', `The ${nm(watch)} sets ${metal}. ${cap(listAnd(off))} ${off.length > 1 ? 'break' : 'breaks'} it.`);
+  if (key === 'gym') add('Metals', 'ok', 'No watch and no belt for training, so there is nothing to match.');
+  else if (off.length) add('Metals', 'bad', `The ${nm(watch)} sets ${metal}. ${cap(listAnd(off))} ${off.length > 1 ? 'break' : 'breaks'} it.`);
   else add('Metals', 'ok', `${cap(metal || 'one metal')} throughout: ${listAnd([nm(watch)].concat(belt && belt.metal ? [`${belt.metal} buckle`] : [], glasses ? [nm(glasses)] : []))}.`);
   if (belt && !belt.metal && metal) add('Metals', 'you', `Check that the buckle on the ${nm(belt)} is ${metal}.`);
   const goldStop = plan.find((k) => OCCASIONS[k].gold);
@@ -743,7 +744,8 @@ export function explain(ctx, o, named = []) {
   const warm = tones.filter((x) => x === 'warm').length, cool = tones.filter((x) => x === 'cool').length;
   const pal = [...new Set([jacket && jC.label, tC.label, bC.label].filter(Boolean))];
   let col = '';
-  if (pal.length && metal && ((metal === 'gold' && warm >= cool && warm > 0) || (metal === 'silver' && cool >= warm && cool > 0))) col = `${cap(listAnd(pal))} ${pal.length > 1 ? 'are' : 'is'} ${metal === 'gold' ? 'warm' : 'cool'} in tone, which is why the ${metal} ${nm(watch)} belongs with ${pal.length > 1 ? 'them' : 'it'}.`;
+  if (key === 'gym') col = pal.length ? `${cap(listAnd(pal))}: plain colours that go together.` : '';
+  else if (pal.length && metal && ((metal === 'gold' && warm >= cool && warm > 0) || (metal === 'silver' && cool >= warm && cool > 0))) col = `${cap(listAnd(pal))} ${pal.length > 1 ? 'are' : 'is'} ${metal === 'gold' ? 'warm' : 'cool'} in tone, which is why the ${metal} ${nm(watch)} belongs with ${pal.length > 1 ? 'them' : 'it'}.`;
   else if (pal.length) col = `${cap(listAnd(pal))}: quiet colours that sit together.`;
   if (suit) col += ' One cloth from shoulder to shoe.';
   else if (jacket && jC.label && bC.label && Math.abs(jC.d - bC.d) >= 3) col += ` The ${jC.label} jacket and ${bC.label} trousers are far enough apart to look deliberate.`;
@@ -752,7 +754,7 @@ export function explain(ctx, o, named = []) {
   const ACCENTS = ['pink', 'red', 'lavender', 'green', 'sage', 'mustard', 'burgundy', 'purple', 'orange', 'teal', 'turquoise', 'coral', 'yellow'];
   const accents = majors.filter((x) => ACCENTS.includes(x.color));
   if (accents.length === 1) col += ` One accent, the ${nm(accents[0])}.`;
-  add('Colour', col.trim(), metal ? `${metal === 'gold' ? 'warm' : 'cool'} tones with the ${metal} watch` : 'colours that sit together');
+  add('Colour', col.trim(), key === 'gym' ? 'plain colours that go together' : metal ? `${metal === 'gold' ? 'warm' : 'cool'} tones with the ${metal} watch` : 'colours that sit together');
 
   // the details his rules care about
   const det = [];
@@ -762,7 +764,7 @@ export function explain(ctx, o, named = []) {
   else if (!loops) det.push('No belt, since these trousers have no loops.');
   else if (!belt && o.tuck !== 'tucked') det.push('Untucked, so no belt is needed.');
   const metals = [belt && belt.metal, glasses && (glasses.metal === 'tortoise' ? (metal === 'gold' ? 'gold' : 'x') : glasses.metal)].filter(Boolean);
-  if (metal && metals.length && metals.every((m) => m === metal)) det.push(`${cap(listAnd([belt && belt.metal ? 'buckle' : '', glasses ? 'frames' : '', 'watch'].filter(Boolean)))} ${metals.length > 1 ? 'all agree' : 'agree'}${glasses && glasses.metal === 'tortoise' ? ', tortoiseshell counting as gold' : ''}.`);
+  if (key !== 'gym' && metal && metals.length && metals.every((m) => m === metal)) det.push(`${cap(listAnd([belt && belt.metal ? 'buckle' : '', glasses ? 'frames' : '', 'watch'].filter(Boolean)))} ${metals.length > 1 ? 'all agree' : 'agree'}${glasses && glasses.metal === 'tortoise' ? ', tortoiseshell counting as gold' : ''}.`);
   if (o.tuck === 'tucked' && jacket && !suit) det.push('Fully tucked, so the jacket can come off.');
   else if (o.tuck === 'untucked') det.push('Worn untucked, hem above mid fly.');
   add('Details', det.join(' '), leather ? 'belt and shoes matched' : '');
@@ -869,7 +871,7 @@ export function rows(o, items) {
   r.push({ slot: 'belt', item: o.belt && o.belt !== 'none' ? get(o.belt) : null, note: o.belt && o.belt !== 'none' ? '' : (b && b.loops === false ? 'no loops' : '') });
   r.push({ slot: 'shoes', item: get(o.shoes) });
   r.push({ slot: 'socks', item: o.socks ? get(o.socks) : null });
-  r.push({ slot: 'watch', item: get(o.watch) });
+  if (o.occ !== 'gym') r.push({ slot: 'watch', item: get(o.watch) });      // nobody trains in a dress watch: it stays off the list and out of the picture
   r.push({ slot: 'glasses', item: o.glasses ? get(o.glasses) : null });
   r.push(...ex.filter((x) => !chest(x)));
   return r;
