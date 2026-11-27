@@ -635,6 +635,117 @@ export function audit(ctx, o) {
   if (occ.teach || occ.jacket !== 'optional') add('Yours to check', 'you', 'Pressed, lint free, shoes conditioned, nothing faded.');
   return out;
 }
+// ---------- why this fit ----------
+// Says in plain words why a fit suits the day it is for: the occasion, the weather in the hours it is worn, how the colours
+// and the details hold together, what is fresh about it, and what is there because he asked. One reason per line, each with
+// a few words (s) that can stand in a summary. It reads any complete fit, whoever chose it.
+export function explain(ctx, o, named = []) {
+  const get = (id) => ctx.items.find((i) => i.id === id);
+  const key = o.occ || ctx.occ, occ = OCCASIONS[key] || OCCASIONS.casual, date = o.date || ctx.date;
+  const suit = o.suit ? get(o.suit) : null;
+  const jacket = suit || (o.jacket && o.jacket !== 'none' ? get(o.jacket) : null);
+  const top = get(o.top), bottom = get(o.suit || o.bottom), shoes = get(o.shoes), watch = get(o.watch);
+  if (!top || !bottom || !shoes || !watch) return [];
+  const belt = o.belt && o.belt !== 'none' ? get(o.belt) : null, glasses = o.glasses ? get(o.glasses) : null;
+  const coat = o.coat ? get(o.coat) : null;
+  const nm = (it) => it.short || it.name;
+  const are = (it) => (/[^s]s$/.test(nm(it)) ? 'are' : 'is');
+  const out = [];
+  const add = (k, t, s) => { if (t) out.push(s ? { k, t, s } : { k, t }); };
+  const plan = [key].concat((o.also || []).filter((k) => OCCASIONS[k] && k !== key));
+  const easy = !!occ.teach && ((occ.casualDays || []).includes(dow(date)) || !!o.easy || !!o.lab);
+  const majors = [jacket, suit ? null : bottom, top, shoes].filter(Boolean);
+  const asked = new Set(named || []);
+
+  // the occasion and the dress level it wants
+  const fs = [top, bottom, shoes].concat(jacket ? [jacket] : []).map((x) => x.formality || 3);
+  const f = fs.reduce((a, b) => a + b, 0) / fs.length;
+  const word = (v) => (v < 1.8 ? 'very relaxed' : v < 2.6 ? 'relaxed' : v < 3.4 ? 'smart casual' : v < 4.6 ? 'sharp' : 'formal');
+  let lo = easy ? 2 : occ.lo, hi = easy ? 4 : occ.hi;
+  const sh = occ.teach ? Math.max(0, o.shift || 0) : (o.shift || 0);
+  if (sh) { lo = Math.max(1, Math.min(4.5, lo + sh)); hi = Math.min(5, Math.max(lo + 1, hi + sh)); }
+  const where = key === 'dressy' ? 'a special occasion' : sayOf(key);
+  const built = jacket ? (suit ? `the ${nm(suit)} worn as a full suit` : `the ${nm(jacket)} over the ${nm(top)}`) : `the ${nm(top)} with the ${nm(bottom)}`;
+  const carries = plan.length > 1 ? ` It also holds up at ${listAnd(plan.slice(1).map(sayOf))}.` : '';
+  if (occ.teach && !easy) add('Occasion', `A lecture day calls for a jacket and a shirt that can stand in front of a room. ${jacket ? cap(built) + ' does that' : 'No jacket here' + (o.lab ? ', since the lab coat goes over it' : '')}.${carries}`, 'right for the lecture');
+  else if (occ.teach) add('Occasion', `This is the group's dressed down day, so it eases off a notch and still looks like the person in charge: ${built}.${carries}`, 'eased off for the dressed down day');
+  else {
+    const want = word(lo) === word(hi) ? word(lo) : `${word(lo)} to ${word(hi)}`;
+    const off = f < lo - 0.6 ? ' That is a step under the usual, because of what you asked for.' : f > hi + 0.6 ? ' That is a step over the usual, because of what you asked for.' : '';
+    add('Occasion', `${cap(where)} wants ${want}. This reads ${word(f)}: ${built}.${off}${carries}`, `${word(f)} enough for ${where}`);
+  }
+
+  // the weather in the hours it is worn
+  const w = ctx.weather || {};
+  const bC = colorOf(bottom), tC = colorOf(top), jC = jacket ? colorOf(jacket) : null;
+  if (w.hi != null) {
+    const whi = Math.round(w.hi), wlo = Math.round(w.lo == null ? w.hi - 18 : w.lo), rain = Math.round(w.rain || 0);
+    const range = whi === wlo ? `${whi}°` : `${wlo}° to ${whi}°`;
+    let t, s;
+    const layers = (jacket ? (jacket.warmth == null ? 2 : jacket.warmth) : 0) + (top.warmth == null ? 1 : top.warmth);     // the same count the check list uses
+    if (coat) { t = `It gets down to ${wlo}°, so the ${nm(coat)} goes over it outside and comes off indoors.`; s = `covered for ${wlo}°`; }
+    else if ((wlo <= 40 && layers < 4) || (wlo <= 47 && layers < 3)) { t = `It gets down to ${wlo}°. This is right indoors, and it wants a coat or a layer over it outside.`; s = ''; }
+    else if (whi <= 64) { t = jacket ? `Cool, ${range}. The ${nm(jacket)} over the ${nm(top)} is enough warmth without a coat.` : (top.warmth || 1) >= 2 ? `Cool, ${range}. The ${nm(top)} is the warm layer.` : `Cool, ${range}. Take a layer for outside.`; s = `warm enough for ${wlo}°`; }
+    else if (whi >= 86) { t = jacket ? `Hot, up to ${whi}°. The jacket is there for the room, and it comes off outside.` : `Hot, up to ${whi}°. No jacket, and the ${nm(top)} breathes.`; s = `light enough for ${whi}°`; }
+    else { t = jacket ? `Mild, ${range}. The jacket is comfortable at that, on or off.` : `Mild, ${range}. One layer is right.`; s = `right for ${range}`; }
+    if (rain >= 50 && !shoes.suede) t += ' Rain is likely, and nothing here is suede.';
+    if (ctx.win && ctx.win.from >= 17 && bC.d >= 6) t += ' After dark the darker trousers read right.';
+    add('Weather', t, s);
+  }
+
+  // colour
+  const metal = watch.metal;
+  const tones = [jC, tC, bC].filter(Boolean).map((c) => c.tone);
+  const warm = tones.filter((x) => x === 'warm').length, cool = tones.filter((x) => x === 'cool').length;
+  const pal = [...new Set([jacket && jC.label, tC.label, bC.label].filter(Boolean))];
+  let col = '';
+  if (pal.length && metal && ((metal === 'gold' && warm >= cool && warm > 0) || (metal === 'silver' && cool >= warm && cool > 0))) col = `${cap(listAnd(pal))} ${pal.length > 1 ? 'are' : 'is'} ${metal === 'gold' ? 'warm' : 'cool'} in tone, which is why the ${metal} ${nm(watch)} belongs with ${pal.length > 1 ? 'them' : 'it'}.`;
+  else if (pal.length) col = `${cap(listAnd(pal))}: quiet colours that sit together.`;
+  if (suit) col += ' One cloth from shoulder to shoe.';
+  else if (jacket && jC.label && bC.label && Math.abs(jC.d - bC.d) >= 3) col += ` The ${jC.label} jacket and ${bC.label} trousers are far enough apart to look deliberate.`;
+  else if (!jacket && tC.label && bC.label && Math.abs(tC.d - bC.d) >= 3) col += ` ${cap(tC.label)} over ${bC.label} gives a clean break at the waist.`;
+  if (jacket && tC.label && tC.d < jC.d) col += ` The lighter ${tC.label} under the jacket keeps the light on your face.`;
+  const ACCENTS = ['pink', 'red', 'lavender', 'green', 'sage', 'mustard', 'burgundy', 'purple', 'orange', 'teal', 'turquoise', 'coral', 'yellow'];
+  const accents = majors.filter((x) => ACCENTS.includes(x.color));
+  if (accents.length === 1) col += ` One accent, the ${nm(accents[0])}.`;
+  add('Colour', col.trim(), metal ? `${metal === 'gold' ? 'warm' : 'cool'} tones with the ${metal} watch` : 'colours that sit together');
+
+  // the details his rules care about
+  const det = [];
+  const loops = bottom.loops !== false;
+  const leather = belt && shoes.leather && shoes.leather !== 'none' && leatherMatch(belt, shoes) >= 0;
+  if (leather) det.push('Belt and shoes are the same leather family.');
+  else if (!loops) det.push('No belt, since these trousers have no loops.');
+  else if (!belt && o.tuck !== 'tucked') det.push('Untucked, so no belt is needed.');
+  const metals = [belt && belt.metal, glasses && (glasses.metal === 'tortoise' ? (metal === 'gold' ? 'gold' : 'x') : glasses.metal)].filter(Boolean);
+  if (metal && metals.length && metals.every((m) => m === metal)) det.push(`${cap(listAnd([belt && belt.metal ? 'buckle' : '', glasses ? 'frames' : '', 'watch'].filter(Boolean)))} ${metals.length > 1 ? 'all agree' : 'agree'}${glasses && glasses.metal === 'tortoise' ? ', tortoiseshell counting as gold' : ''}.`);
+  if (o.tuck === 'tucked' && jacket && !suit) det.push('Fully tucked, so the jacket can come off.');
+  else if (o.tuck === 'untucked') det.push('Worn untucked, hem above mid fly.');
+  add('Details', det.join(' '), leather ? 'belt and shoes matched' : '');
+
+  // one thing draws the eye
+  const loud = [jacket, top, suit ? null : bottom, shoes, belt].filter((x) => x && x.statement);
+  if (loud.length === 1) add('Focal point', `The ${nm(loud[0])} ${are(loud[0])} the one thing that draws the eye. Everything else stays quiet.`, 'one focal point');
+
+  // what is fresh about it
+  const hist = buildHistory(ctx.wears || [], date);
+  if (occ.group) {
+    const seen = hist.byGroup[occ.group] || new Map();
+    const fresh = majors.filter((it) => !seen.has(it.id));
+    if (fresh.length) add('Fresh', `${cap(groupName(ctx, occ.group))} has not seen the ${listAnd(fresh.map(nm), 'or')}.`, 'new to this group');
+  } else {
+    const rested = majors.filter((it) => { const last = hist.any.get(it.id); return last && daysBetween(last, date) >= 14; });
+    const never = majors.filter((it) => !hist.any.has(it.id) && !hist.sameDay.has(it.id));
+    if (never.length) add('Fresh', `The ${listAnd(never.map(nm))} ${never.length > 1 || are(never[0]) === 'are' ? 'have' : 'has'} not been logged before.`, 'not worn before');
+    else if (rested.length) add('Fresh', `You have not worn the ${listAnd(rested.map(nm))} in at least two weeks.`, 'not worn lately');
+  }
+
+  // what is there because he asked
+  const mine = [jacket, suit ? null : bottom, top, shoes, belt, coat, o.hat ? get(o.hat) : null, watch, glasses].filter((x) => x && asked.has(x.id)).concat((o.extras || []).map(get).filter(Boolean));
+  if (mine.length) add('You asked', `The ${listAnd(mine.map(nm))} ${mine.length > 1 || are(mine[0]) === 'are' ? 'are' : 'is'} in because you asked. The rest is built around ${mine.length > 1 ? 'them' : 'it'}.`);
+  if (plan.includes('lounge') && ctx.cars && ctx.cars.length) add('Drive', `Take the ${ctx.cars[0]}.`);
+  return out;
+}
 export const sayOf = (k) => (OCCASIONS[k] && OCCASIONS[k].say) || 'the day';
 const FAMILY = { tan: 'tan', camel: 'tan', khaki: 'tan', stone: 'tan', cognac: 'tan', taupe: 'tan', cream: 'cream', 'off-white': 'cream', white: 'cream', navy: 'blue', indigo: 'blue', blue: 'blue', 'light-blue': 'blue', slate: 'blue',
   charcoal: 'grey', grey: 'grey', 'light-grey': 'grey', olive: 'green', green: 'green', sage: 'green', brown: 'brown', 'dark-brown': 'brown', burgundy: 'red', red: 'red', lavender: 'purple', purple: 'purple' };

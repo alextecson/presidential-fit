@@ -119,19 +119,25 @@ export function editPromptFrom(before, after) {
   const d = diffLines(before, after);
   return [
     'Edit the first attached photo. It is a finished photograph of a man in an outfit. The second attached photo shows the same man and is only a reference for his face.',
-    'Keep the photograph as it is: the same man, the same face, the same pose, the same framing, the same background and the same lighting. He must stay instantly recognizable as the same person.',
-    ...(d.changed.length ? ['Change only these pieces of his outfit:', ...d.changed.map((l) => '- ' + l)] : []),
+    'Keep the photograph as it is: the same man, the same pose, the same framing, the same background and the same lighting. He must stay instantly recognizable as the same person.',
+    FACE + ' If he is not smiling in the photo, change that and nothing else about his face.',
+    ...(d.changed.length ? ['Change only these pieces of his outfit:', ...d.changed.map((l) => '- ' + l)] : ['His outfit does not change.']),
     ...(d.gone.length ? ['Take these off. He no longer wears them:', ...d.gone.map((l) => '- ' + l)] : []),
     'Every other garment stays exactly as it is in the photo. For reference, the complete outfit after the change:',
     ...after.map((l) => '- ' + l),
     'Fit: slim but not skinny, clothes pressed and lint free. Head to toe including the shoes. No text, no watermark, no extra people, no added logos.',
   ].join('\n');
 }
+// What every picture of him should look like beyond the clothes. Raise LOOK when this changes: pictures made under an
+// older number are redone when he next sees them.
+export const LOOK = 2;
+const FACE = 'Expression: a warm, relaxed, natural smile, the way he would smile at a friend across the room. Not a frown, not a stern or blank look.';
 export function promptFrom(lines, scene, photoCount = 1) {
   const who = photoCount > 1 ? `the man shown in the first ${photoCount} reference photos` : 'the man shown in the first reference photo';
   return [
     `Create one photorealistic full length photograph of ${who}.`,
     'Keep him exactly as he is: the same face, skin tone, hair, facial hair, age, height, build and body proportions. Do not make him younger, slimmer, taller or more muscular. He must be instantly recognizable as the same person.',
+    FACE,
     'Dress him in exactly this outfit and nothing else:',
     ...lines.map((l) => '- ' + l),
     'Fit: slim but not skinny, jacket shoulders exact, a quarter inch of shirt cuff showing, trousers with a slight break or none. Clothes pressed and lint free.',

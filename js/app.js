@@ -7,8 +7,10 @@ import { loadForecast, weatherFor, today, FRESH_MS } from './weather.js';
 import { parseAsk, windowFor, colourSaid } from './ask.js';
 import * as L from './link.js';
 import * as C from './check.js';
+import * as P from './place.js';
+import * as O from './openai.js';
 
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -217,6 +219,7 @@ function respond(before, latest) {
   out.push(...adopted(p), ...painted(p));
   out.push(...tell(p, p.made || []));
   out.push(...carried(p, p.made || []));
+  if (after) { const gist = E.explain(ctx(), after, namedIds()).map((r) => r.s).filter(Boolean).slice(0, 3); if (gist.length) out.push(`Why this one: ${E.listAnd(gist)}. The full reasons are under the pieces.`); }
   const worn = p.worn || [];
   const swapped = (p.avoid || []).filter((id) => !worn.includes(id));
   if (worn.length) out.push(`Already worn, so out: ${few(worn)}. Kept clear of their colours too.`);
@@ -310,7 +313,7 @@ async function answer(text, over = {}) {
 }
 // While a new mockup is made for a changed fit, the last one stays on screen instead of a blank.
 // It is also the photograph the Mac edits, so a change to the fit is a change to the same picture.
-function keepMock() { const c = current(); const mk = c.o ? mockFor(c.o) : null; if (mk) ui.prevMock = { blob: mk.blob, bh: mk.bh || null }; }
+function keepMock() { const c = current(); const e = c.o ? mockEntry(c.o) : null; if (e) ui.prevMock = { blob: e[1].blob, bh: e[1].bh || null, key: e[0] }; }
 // Words in the Change box that mean "not what is on screen": the whole fit, or one named piece of it.
 const CHANGE_ALL = /\b(change it|change this|change (?:the |this |my )?(?:fit|look|outfit)|something else|something different|(?:a )?different (?:fit|look|outfit|one)|another (?:one|fit|look|outfit)|not this|(?:a )?new (?:one|fit|look|outfit)|switch it up|start over|i (?:already )?wore (?:this|that|it)|wore (?:this|that|it)|worn (?:this|that|it))\b/;
 const CHANGE_ONE = /\b(?:change|different|another|other|swap|switch|new|replace|lose|drop)(?: out)?(?: the| my| that| those| these| a| an)? (jackets?|blazers?|suits?|coats?|shirts?|tops?|polos?|sweaters?|tees?|pants|trousers|jeans|slacks|chinos|shoes|loafers|sneakers|belts?|watch(?:es)?|hats?|socks|glasses)\b/g;
@@ -349,13 +352,16 @@ function placeOf() {
 const staged = () => { const p = placeOf(); return !!(p && p.venue && !p.soft && maker()); };
 const KIND_WORD = { work: 'work', dinner: 'dinner', lounge: 'drinks', bar: 'drinks', event: 'an event', dressy: 'a special occasion', casual: 'a casual day' };
 function mockKey(o) { const p = placeOf(); return E.signature(o) + (p && p.tag ? '@' + p.tag : ''); }
+// A picture is shown as it is while nothing about it is out of date: not a piece's description (stale), and not the look every
+// picture should have (M.LOOK, the smile for one). One he added by hand is his own and is never redone for him.
+const current_ = (m) => !!m && !m.stale && ((m.look || 1) >= M.LOOK || m.model === 'ChatGPT app');
 // The stored mockup for the fit on screen, with the name it is stored under.
 function mockEntry(o) {
   const all = st().mockups || {}, p = placeOf(), sig = E.signature(o), key = mockKey(o);
-  if (all[key] && !all[key].stale) return [key, all[key]];
+  if (all[key] && current_(all[key])) return [key, all[key]];
   if (p && p.tag) return null;                                     // a place was named: only a picture set there will do
   let best = null;                                                 // no place named (a fit opened from the log, say): any picture of this fit, newest first
-  for (const k of Object.keys(all)) if (k.startsWith(sig + '@') && !all[k].stale && (!best || (all[k].at || 0) > (best[1].at || 0))) best = [k, all[k]];
+  for (const k of Object.keys(all)) if (k.startsWith(sig + '@') && current_(all[k]) && (!best || (all[k].at || 0) > (best[1].at || 0))) best = [k, all[k]];
   return best;
 }
 function mockFor(o) { const e = mockEntry(o); return e ? e[1] : null; }
@@ -367,7 +373,7 @@ function staleMocks(id) {
   for (const [k, m] of Object.entries(all)) {
     if (!k.split(/[|+@]/).includes(id) || m.stale) continue;
     m.stale = true;
-    if (k === curKey) ui.prevMock = { blob: m.blob, bh: m.bh || null };
+    if (k === curKey) ui.prevMock = { blob: m.blob, bh: m.bh || null, key: k };
   }
 }
 // Any picture of this fit, wherever it was set: shown dimmed while the one for this place is made.
@@ -404,40 +410,95 @@ function photoState(o, mk) {
 // One request to ChatGPT's image engine for one fit, saved against that fit when it comes back.
 async function createMockup(o, opts = {}) {
   const key = mockKey(o), place = placeOf();                       // fixed now: the fit and the place may change while ChatGPT works
-  if (maker() !== 'mac') return createWithKey(o, opts, key, place);
-  // The Mac holds the reference photo and the ChatGPT sign in. The phone sends only the list of pieces and the setting, sealed.
+  const linked = !!(ui.link && st().settings.linkSeen);
+  if (maker() !== 'key') return createOnMac(o, opts, key, place);
+  try { return await createWithKey(o, opts, key, place); }
+  catch (e) {
+    // the phone could not do it alone this time: if his Mac is there it is asked instead, and he is told why
+    if ((e && e.name === 'AbortError') || !linked || (e instanceof M.MockupError && ['photo', 'paused', 'blocked'].includes(e.kind))) throw e;
+    toast(`${(e && e.message) || 'OpenAI did not answer.'} Your Mac is making this one.`, 7000);
+    return createOnMac(o, opts, key, place);
+  }
+}
+// The Mac holds the reference photo and the ChatGPT sign in. The phone sends only the list of pieces and the setting, sealed.
+async function createOnMac(o, opts, key, place) {
   let lock = null;
   try { if (navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); } catch (e) { /* the screen may dim; the wait goes on */ }
   try {
     const brief = M.briefFor(o, st().items, st().profile, st().settings.setting || 'auto', place);
     const bh = await L.briefHash(brief.lines, brief.scene);
     if (place && place.venue) brief.place = { name: place.venue, kind: (E.OCCASIONS[o.occ] || {}).teach ? 'class' : KIND_WORD[o.occ] || '', when: place.when };
-    // a change to a fit that already has a mockup is made to that same photograph
-    const prev = !opts.fresh && ui.prevMock && ui.prevMock.bh && ui.prevMock.bh !== bh ? ui.prevMock.bh : null;
+    // a change to a fit that already has a mockup is made to that same photograph. So is a picture of this very fit that is out of date.
+    const mine = (st().mockups || {})[key];
+    const prev = opts.fresh ? null : (ui.prevMock && ui.prevMock.bh) || (mine && mine.bh) || null;
     let did = {};
     const blob = await L.askMac(ui.link, brief, Object.assign({}, opts, { prev, onDone: (d) => { did = d || {}; } }));
     await saveMock(o, blob, 'ChatGPT on your Mac', { key, bh, where: did.where || '', miss: !!did.miss && !!(place && place.venue && !place.soft), place: place ? place.venue : '' });
     return { blob, model: 'mac' };
   } finally { if (lock) lock.release().catch(() => {}); }
 }
-async function createWithKey(o, { signal, onStage } = {}, mkKey, place) {
+// What a named place looks like, asked from the phone with his key: once per place, kept on the phone.
+async function placeOnPhone(key, place, o, signal) {
+  const city = st().profile.city || '';
+  const k = (place.venue + '|' + city).toLowerCase();
+  st().places = st().places || {};
+  const had = st().places[k];
+  if (had && Date.now() - had.at < (had.text ? 90 * 86400000 : 30 * 60000)) return had.text ? had : null;
+  const kind = (E.OCCASIONS[o.occ] || {}).teach ? 'class' : KIND_WORD[o.occ] || '';
+  const read = await O.lookUpPlace(key, P.placeName(place.venue), kind, city, signal);
+  if (!read) return null;                                          // no usable answer: asked again another time
+  st().places[k] = read === 'unknown' ? { at: Date.now(), name: '', text: '' } : Object.assign({ at: Date.now() }, read);
+  S.save();
+  return st().places[k].text ? st().places[k] : null;
+}
+// The photograph a change is made to when the phone works alone: the first picture of its line, so repeated changes never wear
+// the face down. It has to show the same setting. Returns { blob, lines, rootKey } or null for a new photograph.
+async function editBaseOnPhone(mkKey, scene, lines) {
+  const all = st().mockups || {};
+  const pk = (ui.prevMock && ui.prevMock.key && all[ui.prevMock.key] ? ui.prevMock.key : null) || (all[mkKey] ? mkKey : null);
+  if (!pk) return null;
+  const pick = (k) => { const r = all[k]; return r && (k === mkKey || (Array.isArray(r.lines) && r.scene === scene)) ? k : null; };
+  const rk = (all[pk].root && pick(all[pk].root)) || pick(pk);
+  if (!rk) return null;
+  const rec = all[rk], was = Array.isArray(rec.lines) ? rec.lines : lines;        // a picture of this very fit with no record of its pieces shows these pieces
+  const d = M.diffLines(was, lines);
+  if (!(d.changed.length + d.gone.length) && (rec.look || 1) >= M.LOOK && !rec.stale) return null;
+  const blob = await S.blobGet(rec.blob);
+  return blob ? { blob, lines: was, rootKey: rk } : null;
+}
+async function createWithKey(o, { signal, onStage, fresh } = {}, mkKey, place) {
   const key = await S.secretGet('openai');
   if (!key) throw new M.MockupError('Add your OpenAI key in More first.', 'auth');
   const photos = (st().modelPhotos || []).slice(0, 3);
-  const imgs = [];
-  for (const id of photos) { const b = await S.blobGet(id); if (b) imgs.push(b); }
-  if (!imgs.length) throw new M.MockupError('Add a full length photo of yourself in More first.', 'photo');
-  for (const id of [o.suit || (o.jacket !== 'none' ? o.jacket : null), o.top, o.suit ? null : o.bottom, o.shoes].filter(Boolean)) {
-    const it = item(id); if (it && it.photo && imgs.length < 8) { const b = await S.blobGet(it.photo); if (b) imgs.push(b); }
-  }
-  const prompt = M.buildPrompt(o, st().items, st().profile, st().settings.setting || 'auto', photos.length, place);
+  const faces = [];
+  for (const id of photos) { const b = await S.blobGet(id); if (b) faces.push(b); }
+  if (!faces.length) throw new M.MockupError('Add a full length photo of yourself in More first.', 'photo');
+  const brief = M.briefFor(o, st().items, st().profile, st().settings.setting || 'auto', place);
   let hidden = document.visibilityState === 'hidden', lock = null;
   const seen = () => { if (document.visibilityState === 'hidden') hidden = true; };
   document.addEventListener('visibilitychange', seen);
   try { if (navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); } catch (e) { /* the screen may dim; the request still runs */ }
   try {
-    const out = await M.generate({ key, model: st().settings.model, quality: st().settings.quality, prompt, images: imgs, signal, onModel: onStage });
-    await saveMock(o, out.blob, out.model, { key: mkKey, place: place ? place.venue : '' });
+    // the setting: a named place is looked up once, and its real look becomes the backdrop
+    let scene = brief.scene, where = '', miss = false;
+    if (place && place.venue) {
+      let found = null;
+      try { found = await placeOnPhone(key, place, o, signal); } catch (e) { if (e && e.name === 'AbortError') throw e; }     // no lookup, no harm: the picture is still made
+      if (found) { scene = P.sceneOf(found, place.when); where = found.name; } else miss = !place.soft;
+    }
+    // a change to a fit that already has a mockup is made to that same photograph
+    const base = fresh ? null : await editBaseOnPhone(mkKey, scene, brief.lines);
+    let prompt, images;
+    if (base) { prompt = M.editPromptFrom(base.lines, brief.lines); images = [base.blob, faces[0]]; }
+    else {
+      images = faces.slice();
+      for (const id of [o.suit || (o.jacket !== 'none' ? o.jacket : null), o.top, o.suit ? null : o.bottom, o.shoes].filter(Boolean)) {
+        const it = item(id); if (it && it.photo && images.length < 8) { const b = await S.blobGet(it.photo); if (b) images.push(b); }
+      }
+      prompt = M.promptFrom(brief.lines, scene, faces.length);
+    }
+    const out = await M.generate({ key, model: st().settings.model, quality: st().settings.quality, prompt, images, signal, onModel: onStage });
+    await saveMock(o, out.blob, out.model, { key: mkKey, place: place ? place.venue : '', where, miss, lines: brief.lines, scene, root: base && base.rootKey !== mkKey ? base.rootKey : '' });
     return out;
   } catch (e) {
     if (e instanceof M.MockupError && e.kind === 'network' && hidden) throw new M.MockupError('The app went to the background while ChatGPT was working. Keep it open for about a minute.', 'paused');
@@ -652,7 +713,8 @@ function photoSlot(o, mk, ph) {
   if (ph.kind === 'nophoto') return box('Your ChatGPT mockup goes here', 'First add a full length photo of yourself. ChatGPT uses it to put each fit on you.', '<button class="btn primary small" data-act="addPhoto">Add my photo</button>');
   if (ph.kind === 'nokey') return box('Your ChatGPT mockup goes here', 'One step is left, and only you can do it: add your OpenAI key. After that every fit arrives as a photo of you instead of a sketch.', `<button class="btn primary small" data-act="setupKey">Add my key</button>${app}`);
   if (ph.kind === 'error' && ph.msg === 'Stopped.') return box('Mockup stopped', 'You stopped this one. It is made when you ask.', `<button class="btn primary small" data-act="retryAuto">Create my mockup</button>${app}`);
-  if (ph.kind === 'error') return box(/Mac is not answering/.test(ph.msg || '') ? 'Your Mac is not answering' : 'ChatGPT did not return the mockup', esc((ph.msg || '').replace(/^Your Mac is not answering\. /, '')), `<button class="btn primary small" data-act="retryAuto">Try again</button>${app}`);
+  if (ph.kind === 'error' && /Mac is not answering/.test(ph.msg || '')) return box('Your Mac is not answering', esc((ph.msg || '').replace(/^Your Mac is not answering\. /, '')) + ' Or let this phone make them on its own.', `<button class="btn primary small" data-act="retryAuto">Try again</button><button class="btn small" data-act="setupKey">Use this phone only</button>${app}`);
+  if (ph.kind === 'error') return box('ChatGPT did not return the mockup', esc(ph.msg || ''), `<button class="btn primary small" data-act="retryAuto">Try again</button>${app}`);
   if (ph.kind === 'offline') return box('No connection', 'The mockup is made as soon as you are back online.', '<button class="btn primary small" data-act="retryAuto">Try now</button>');
   if (ph.kind === 'cap') return box('Automatic mockups are done for today', `${AUTO_CAP} were made by themselves today. This one is made when you ask.`, '<button class="btn primary small" data-act="retryAuto">Create my mockup</button>');
   return box('See this fit on you', 'ChatGPT puts this fit on you in about a minute.', '<button class="btn primary small" data-act="retryAuto">Create my mockup</button>');
@@ -662,11 +724,11 @@ function photoSlot(o, mk, ph) {
 // rules (js/check.js). The photograph is sealed on the way, looked at once and not kept on the Mac. The phone keeps it
 // with the reading so he can see what was checked.
 const look = { busy: null, key: null, ctl: null, error: '', errKey: null };
-const canCheck = () => !!(ui.link && st().settings.linkSeen);
+const canCheck = () => ui.hasKey || !!(ui.link && st().settings.linkSeen);
 const redrawLook = () => { if (ui.sheet && ui.sheet.type === 'item') { renderSheet(); hydrateImages($('#sheet')); } else settle(); };
 async function startCheck(d, camera) {
   if (look.busy) { toast('One photo is already being checked.'); return; }
-  if (!canCheck()) { toast('The photo check runs on your Mac, and it has not been seen yet.', 5000); return; }
+  if (!canCheck()) { toast('The photo check needs an OpenAI key on this phone, or your Mac helper.', 5000); return; }
   const piece = d && d.id ? item(d.id) : null;
   if (!piece && !current().o) return;
   const [f] = await pickFile('image/*', false, camera);
@@ -686,8 +748,15 @@ async function runCheck(piece, f) {
     const blob = await M.downscale(f, 1600, 0.86);
     const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
     if (head[0] !== 0xff || head[1] !== 0xd8) throw new Error('That photo could not be read. Take it again, or choose another.');
-    look.busy = 'Reaching your Mac'; redrawLook();
-    const res = await L.askCheck(ui.link, plan, blob, { signal: look.ctl.signal, onStage: (s) => { look.busy = s.st === 'asleep' ? 'Your Mac is not answering. Wake it and this carries on by itself.' : s.st === 'sending' ? 'Sending the photo, sealed' : 'ChatGPT is looking at the photo'; redrawLook(); } });
+    const linked = !!(ui.link && st().settings.linkSeen);
+    const onMac = () => { look.busy = 'Reaching your Mac'; redrawLook(); return L.askCheck(ui.link, plan, blob, { signal: look.ctl.signal, onStage: (s) => { look.busy = s.st === 'asleep' ? 'Your Mac is not answering. Wake it and this carries on by itself.' : s.st === 'sending' ? 'Sending the photo, sealed' : 'ChatGPT is looking at the photo'; redrawLook(); } }); };
+    let res;
+    const own = ui.hasKey ? await S.secretGet('openai') : null;
+    if (own) {                                                      // this phone alone, with his own key
+      look.busy = 'ChatGPT is looking at the photo'; redrawLook();
+      try { res = await O.checkPhoto(own, plan, blob, look.ctl.signal); }
+      catch (e) { if ((e && e.name === 'AbortError') || !linked) throw e; toast(`${(e && e.message) || 'OpenAI did not answer.'} Your Mac is checking this one.`, 7000); res = await onMac(); }
+    } else res = await onMac();
     st().looks = st().looks || {};
     const old = st().looks[key];
     const id = 'look:' + S.uid('k');
@@ -715,8 +784,8 @@ function lookHtml(key, mode, id) {
   const buttons = (again) => `<div class="actions wrap"><button class="btn small${again ? '' : ' primary'}" data-act="lookShot"${forId}>${again ? 'Take a new photo' : 'Take a photo'}</button><button class="btn small" data-act="lookPick"${forId}>Choose a photo</button>${again ? `<button class="btn small danger" data-act="lookClear" data-key="${esc(key)}">Remove</button>` : ''}</div>`;
   if (look.busy && look.key === key) return `<div class="lookcheck"><h3>Photo check</h3><div class="busy"><div class="spinner"></div><p>${esc(look.busy)}</p></div><div class="actions"><button class="btn small" data-act="lookCancel">Cancel</button></div></div>`;
   if (!rec) {
-    const what = mode === 'piece' ? 'Put it on and take a photo. ChatGPT on your Mac says how it fits, and the piece remembers it.' : 'Dressed? Take a photo of the whole look. ChatGPT on your Mac checks it against this fit and your rules before you leave.';
-    return `<div class="lookcheck"><h3>Photo check</h3><p class="fine">${what}</p>${err}${canCheck() ? buttons(false) : '<p class="fine">It runs on your Mac, which has not been seen yet.</p>'}</div>`;
+    const what = mode === 'piece' ? 'Put it on and take a photo. ChatGPT says how it fits, and the piece remembers it.' : 'Dressed? Take a photo of the whole look. ChatGPT checks it against this fit and your rules before you leave.';
+    return `<div class="lookcheck"><h3>Photo check</h3><p class="fine">${what}</p>${err}${canCheck() ? buttons(false) : '<p class="fine">It needs an OpenAI key on this phone (More), or your Mac helper.</p>'}</div>`;
   }
   const tone = rec.verdict === 'ready' || rec.verdict === 'fits' ? 'ok' : rec.verdict === 'unclear' ? 'you' : 'bad';
   const OFF = ['tight', 'loose', 'long', 'short'];
@@ -732,6 +801,13 @@ function lookHtml(key, mode, id) {
   for (const t of rec.good || []) lis.push(`<li class="ok"><i aria-hidden="true"></i><span><b>Works</b>${esc(t)}</span></li>`);
   return `<div class="lookcheck"><div class="lc-head">${rec.photo ? `<img data-blob="${esc(rec.photo)}" alt="The photo that was checked">` : ''}<div><div class="eyebrow">Photo check · ${esc(E.shortDate(E.isoDate(new Date(rec.at))))} ${esc(E.clockLabel(rec.at))}</div><h3 class="lc-${tone}">${esc(C.VERDICTS[rec.verdict] || 'Checked')}</h3></div></div>
     <ul>${lis.join('')}</ul>${err}${canCheck() ? buttons(true) : ''}</div>`;
+}
+// Why this fit suits the day, one reason per line. Pieces he named count as asked for.
+const namedIds = () => { const a = ui.ask || {}; return Object.values(a.locks || {}).concat(Object.values(ui.locks || {}), a.made || []).filter((v) => v && v !== 'none'); };
+function whyHtml(o) {
+  const why = o && o.complete !== false ? E.explain(ctx(), o, namedIds()) : [];
+  if (!why.length) return '';
+  return `<div class="why"><h3>Why this works</h3><ul>${why.map((r) => `<li><b>${esc(r.k)}</b>${esc(r.t)}</li>`).join('')}</ul></div>`;
 }
 // Every factor that was checked for this fit, problems first.
 function checksHtml(checks) {
@@ -774,7 +850,7 @@ function viewFit() {
         <div class="rows">${rs.map((r) => rowHtml(r, c.logged)).join('')}</div>
       </div>
       ${c.entry && c.entry.note && c.logged ? `<p class="note">${esc(c.entry.note)}</p>` : ''}
-      ${c.why.length ? `<div class="why"><h3>Why it works</h3><p>${c.why.map(esc).join(' ')}</p></div>` : ''}
+      ${whyHtml(c.o)}
       ${checksHtml(c.checks)}
       ${lookHtml(E.signature(c.o), 'look', '')}
       <div class="actions">
@@ -838,21 +914,18 @@ function viewMore() {
       ${photos.length < 4 ? '<button class="ph add" data-act="addPhoto"><span>+</span>Add photo</button>' : ''}</div></div></section>
     <section class="sec"><h3>ChatGPT mockups</h3>
       <div class="card" id="keyCard">${ui.hasKey
-        ? `<p>Each fit arrives as a ChatGPT mockup of you, made with your OpenAI key.</p>
+        ? `<p><b>This phone works on its own.</b> Mockups, changes to them, the place lookup and the photo check are made here with your OpenAI key. Your Mac is not needed.</p>
            <label class="toggle"><input type="checkbox" data-in="auto"${s.auto !== false ? ' checked' : ''}><span>Make the mockup by itself with each fit</span></label>
-           <p class="fine">Up to ${AUTO_CAP} a day by themselves, about a minute each. Cost depends on the quality below.</p>`
-        : maker() === 'mac'
-        ? `<p>Each fit arrives as a ChatGPT mockup of you. It is made on your Mac with your ChatGPT plan and sent here encrypted, so your Mac has to be awake and online.</p>
-           <label class="toggle"><input type="checkbox" data-in="auto"${s.auto !== false ? ' checked' : ''}><span>Make the mockup by itself with each fit</span></label>
-           <p class="fine">Up to ${AUTO_CAP} a day by themselves, about a minute each. To have them made anywhere, with no Mac involved, add an OpenAI API key below.</p>`
-        : `<p>Each fit can arrive as a ChatGPT mockup of you instead of a sketch. That takes your own OpenAI API key, and only you can create it.</p>
-           <ol class="steps"><li>Open OpenAI and sign in with your ChatGPT account.</li><li>Under Billing, add a few dollars of credit.</li><li>Under API keys, create a new secret key and copy it.</li><li>Paste it here and tap Save key.</li></ol>
-           <a class="btn small" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Open OpenAI API keys</a>`}
+           <p class="fine">Up to ${AUTO_CAP} a day by themselves, about a minute each. OpenAI bills the key per use: the mockup price depends on the quality below, a photo check or a place lookup is a cent or two.${maker() && ui.link && s.linkSeen ? ' If OpenAI turns a request down, your Mac is asked instead and you are told why.' : ''}</p>`
+        : `<p>${maker() === 'mac' ? '<b>Right now your Mac makes the mockups</b>, with your ChatGPT plan, so it has to be awake and online.' : 'Each fit can arrive as a ChatGPT mockup of you instead of a sketch.'} To have this phone do everything on its own, with no Mac, it needs your own OpenAI API key.</p>
+           <p class="fine">Why a key: an app on a phone cannot use a ChatGPT plan. OpenAI only lets its own app or a signed in computer do that. The API is the one door open to a phone, and OpenAI bills it per use, apart from your plan: roughly 5 to 10 cents a mockup at Standard, a cent or two for a photo check or a place lookup.</p>
+           <ol class="steps"><li>Tap Open OpenAI below and sign in with your ChatGPT account.</li><li>Under Billing, add a card and a few dollars of credit.</li><li>If it asks you to verify your organization, do it. Image models need it.</li><li>Under API keys, create a new secret key and tap Copy.</li><li>Come back here and tap Paste my key.</li></ol>
+           <div class="actions wrap"><a class="btn small" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Open OpenAI</a><button class="btn small primary" data-act="pasteKey">Paste my key</button></div>`}
       <label class="field"><span>OpenAI API key</span><input type="password" id="keyInput" placeholder="${ui.hasKey ? 'Saved on this phone' : 'sk-...'}" autocomplete="off" autocapitalize="off" spellcheck="false" data-in="key"></label>
       <div class="actions"><button class="btn small" data-act="saveKey">Save key</button>${ui.hasKey ? '<button class="btn small" data-act="clearKey">Remove key</button>' : ''}</div>
-      <label class="field"><span>Image quality</span><select data-in="quality">${['low', 'medium', 'high'].map((q) => `<option value="${q}"${s.quality === q ? ' selected' : ''}>${q === 'low' ? 'Draft, about 1 cent' : q === 'medium' ? 'Standard, about 5 cents' : 'Best, about 20 cents'}</option>`).join('')}</select></label>
+      <label class="field"><span>Image quality</span><select data-in="quality">${['low', 'medium', 'high'].map((q) => `<option value="${q}"${s.quality === q ? ' selected' : ''}>${q === 'low' ? 'Draft, about 1 to 2 cents' : q === 'medium' ? 'Standard, about 5 to 10 cents' : 'Best, about 20 to 30 cents'}</option>`).join('')}</select></label>
       <label class="field"><span>Model</span><select data-in="model">${M.MODELS.map((m) => `<option value="${m}"${s.model === m ? ' selected' : ''}>${m}</option>`).join('')}</select></label>
-      <p class="fine">The key stays on this phone and is sent only to OpenAI. OpenAI may ask you to verify your organization before image models work. Without a key, tap Mockup on a fit to hand it to your ChatGPT app.</p></div></section>
+      <p class="fine">The key stays on this phone and is sent only to OpenAI. Prices are estimates from OpenAI's published rates. Without a key and without your Mac, tap Mockup on a fit to hand it to your ChatGPT app.</p></div></section>
     <section class="sec"><h3>Standing rules</h3><div class="card rules">${(st().rules || []).map((g) => `<details><summary>${esc(g.group)}</summary><ul>${g.items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></details>`).join('') || '<p class="empty">No rules loaded.</p>'}</div></section>
     <section class="sec"><h3>Your data</h3><div class="card">
       <p>${st().items.length} pieces, ${st().wears.length} logged days. Everything is stored on this phone only.</p>
@@ -1160,7 +1233,14 @@ const A = {
     const r = await M.testKey(v);
     if (r === 'rejected') { toast('OpenAI did not accept that key. Check it and paste again.', 5000); return; }
     await S.secretSet('openai', v); ui.hasKey = true; auto.failed.clear(); render();
-    toast(r === 'ok' ? 'Key works. Every fit now arrives as your ChatGPT mockup.' : 'Saved. It will be checked when you are online.', 5000);
+    toast(r === 'ok' ? 'Key works. This phone now makes the mockups and checks on its own.' : 'Saved. It will be checked when you are online.', 5000);
+  },
+  pasteKey: async () => {
+    let t = '';
+    try { t = ((await navigator.clipboard.readText()) || '').trim(); } catch (e) { toast('The clipboard could not be read. Paste the key in the box below and tap Save key.', 6000); return null; }
+    if (!/^sk-[A-Za-z0-9_-]{20,}$/.test(t)) { toast('No OpenAI key is copied yet. In OpenAI, create the key and tap Copy, then come back.', 6000); return null; }
+    const box = $('#keyInput'); if (box) box.value = t;
+    return A.saveKey();
   },
   clearKey: async () => { await S.secretSet('openai', null); ui.hasKey = false; render(); toast('Key removed.'); },
   mockup: () => { if (current().o) openSheet({ type: 'mockup' }); },
@@ -1259,9 +1339,10 @@ async function saveMock(o, blob, model, extra = {}) {
   const id = 'mock:' + S.uid('m');
   await S.blobPut(id, blob);
   const rec = { blob: id, at: Date.now(), model, date: o.date, occ: o.occ };
-  for (const k of ['bh', 'where', 'place']) if (extra[k]) rec[k] = extra[k];
+  for (const k of ['bh', 'where', 'place', 'lines', 'scene', 'root']) if (extra[k]) rec[k] = extra[k];
   if (extra.miss) rec.miss = true;
-  if (old) { await S.blobDel(old.blob); if (ui.prevMock && ui.prevMock.blob === old.blob) ui.prevMock = { blob: id, bh: rec.bh || ui.prevMock.bh }; }
+  if (model !== 'ChatGPT app') rec.look = M.LOOK;
+  if (old) { await S.blobDel(old.blob); if (ui.prevMock && ui.prevMock.blob === old.blob) ui.prevMock = { blob: id, bh: rec.bh || ui.prevMock.bh, key }; }
   st().mockups[key] = rec;
   await S.save(true);
 }

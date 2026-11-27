@@ -20,7 +20,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const lib = fs.existsSync(path.join(here, 'link.js')) ? here : path.join(here, '..', 'js');
 const { RELAY, derive, seal, open, newPair, sessionKey, sealBytes, openBytes, tidy, briefHash } = await import(pathToFileURL(path.join(lib, 'link.js')).href);
 const { checkTask, parseCheck } = await import(pathToFileURL(path.join(lib, 'check.js')).href);
-const { promptFrom, editPromptFrom, diffLines, WHENS } = await import(pathToFileURL(path.join(lib, 'mockup.js')).href);
+const { promptFrom, editPromptFrom, diffLines, WHENS, LOOK } = await import(pathToFileURL(path.join(lib, 'mockup.js')).href);
+const { placeTask, readPlace, sceneOf, placeName } = await import(pathToFileURL(path.join(lib, 'place.js')).href);
 
 const HOME = process.env.PF_HOME || path.join(os.homedir(), 'Library', 'Application Support', 'PresidentialFit');
 const readJson = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return fallback; } };
@@ -74,7 +75,6 @@ async function announce() {
 
 // ---------- requests ----------
 const KINDS = ['work', 'dinner', 'drinks', 'an event', 'a special occasion', 'class', 'a casual day'];
-const placeName = (v) => tidy(String(v == null ? '' : v).replace(/[\u2018\u2019]/g, "'").replace(/[^\p{L}\p{N} '&.,-]/gu, ' '), 60);
 function checkRequest(r) {
   if (!r || r.v !== 1 || !/^[0-9a-f]{16}$/.test(r.id || '') || typeof r.t !== 'number' || typeof r.pub !== 'string' || r.pub.length > 200) return null;
   if (Math.abs(Date.now() - r.t) > 10 * 60 * 1000) return null;                       // old requests are not worth a picture
@@ -165,21 +165,23 @@ function editBase(job) {
   const base = (prev && prev.root && pick(prev.root)) || pick(job.prev);
   if (!base) return null;
   const d = diffLines(base.note.lines, job.lines);
-  return d.changed.length + d.gone.length ? base : null;
+  return d.changed.length + d.gone.length || (base.note.look || 1) < LOOK ? base : null;      // nothing to change in the clothes, but the picture predates the current look
 }
 async function handle(job) {
   if (job.kind === 'check') return handleCheck(job);
   const hash = await briefHash(job.lines, job.scene);
   const cached = path.join(CACHE, hash + '.jpg'), noteFile = path.join(CACHE, hash + '.json');
-  const hit = fs.existsSync(cached) && !job.fresh;
-  let note = hit ? (noteOf(hash) || {}) : null;
+  const had = fs.existsSync(cached) ? (noteOf(hash) || {}) : null;
+  const hit = !!had && !job.fresh && (had.look || 1) >= LOOK;       // a picture from before the current look is made again
+  let note = hit ? had : null;
+  if (had && !hit && !job.fresh && !job.prev) job.prev = hash;      // and it is made again as an edit of itself
   if (!hit) {
     if (madeToday() >= cfg.maxPerDay) throw new UserError('Your Mac has made its limit of mockups for today.');
     const base = editBase(job);
     if (base) {
       try {
         await editImage(job, base, cached);
-        note = { lines: job.lines, scene: job.scene, root: base.hash, where: base.note.where || '', miss: !!base.note.miss, how: 'edit' };
+        note = { lines: job.lines, scene: job.scene, root: base.hash === hash ? undefined : base.hash, where: base.note.where || '', miss: !!base.note.miss, how: 'edit' };
         try { const now = new Date(); fs.utimesSync(base.jpg, now, now); fs.utimesSync(path.join(CACHE, base.hash + '.json'), now, now); } catch (e) { /* still in use either way */ }
       } catch (e) {
         if (job.cancelled) throw e;
@@ -191,7 +193,7 @@ async function handle(job) {
       await makeImage(job, place, cached);
       note = { lines: job.lines, scene: job.scene, where: place ? place.name : '', miss: !!job.place && !place, how: 'new' };
     }
-    note.at = Date.now();
+    note.at = Date.now(); note.look = LOOK;
     fs.writeFileSync(noteFile, JSON.stringify(note));
     fs.writeFileSync(DAY, JSON.stringify({ d: new Date().toDateString(), n: madeToday() + 1 }));
   }
@@ -291,49 +293,19 @@ async function lookUp(job) {
   };
   let said = await ask(placeTask(job.place.name, job.place.kind, city, false), 'low');
   // nothing under that spelling: he types fast, so look once more for the place the name sounds like
-  if (said === 'UNKNOWN' && !job.cancelled) said = await ask(placeTask(job.place.name, job.place.kind, city, true), 'medium');
+  if (readPlace(said) === 'unknown' && !job.cancelled) said = await ask(placeTask(job.place.name, job.place.kind, city, true), 'medium');
   job.child = null;
   fs.rmSync(dir, { recursive: true, force: true });
   if (job.cancelled) throw new Error('cancelled');
-  const m = /^FOUND:\s*(.+?)\s*\n+([\s\S]+)$/.exec(said) || /^FOUND:\s*([^.\n]{2,80})\.\s+([\s\S]+)$/.exec(said);
-  // "Name, City": the city is dropped when the name already says it
-  const named = m ? placeName(m[1]).replace(/,\s*([^,]+)$/, (tail, c, at, all) => (all.slice(0, at).toLowerCase().includes(c.trim().toLowerCase()) ? '' : tail)) : '';
-  const found = m ? { at: Date.now(), name: named, text: tidy(m[2], 520).replace(/\.$/, '') } : null;
-  if (!found && said !== 'UNKNOWN') { log('job', job.id, 'the place could not be looked up'); return null; }   // no answer at all: ask again next time
+  const read = readPlace(said);
+  const found = read && read !== 'unknown' ? Object.assign({ at: Date.now() }, read) : null;
+  if (!read) { log('job', job.id, 'the place could not be looked up'); return null; }           // no answer at all: ask again next time
   all[key] = found && found.name && found.text ? found : { at: Date.now(), name: '', text: '' };
   try { fs.writeFileSync(PLACES, JSON.stringify(all)); } catch (e) { /* asked again next time */ }
   log('job', job.id, all[key].text ? 'place found' : 'place not found', 'in', Math.round((Date.now() - started) / 1000) + 's');
   return all[key].text ? decorate(all[key], job) : null;
 }
-// What ChatGPT is asked about a place. The answer names the place and its city, so a wrong match shows on the phone.
-// again: the exact spelling found nothing, so this time it looks for the place the name sounds like.
-function placeTask(name, kind, city, again) {
-  const tail = [
-    'Line 1: FOUND: then the proper name of the place, a comma, and the city it is in.',
-    'Line 2: one paragraph of at most 70 words that a photographer could use to recreate the spot where a guest would stand: what kind of place it is, whether that spot is indoors or outdoors, then materials, colours, lighting and signature features.',
-  ];
-  if (again) return [
-    'Do not write or run any code and do not create files. Use web search, up to five searches.',
-    `A man wrote that he is going to "${name}"${kind ? ' for ' + kind : ''}.${city ? ' He lives in ' + city + '.' : ''} He types fast, and a first search for that exact spelling found nothing, so the name is almost certainly misspelled or written the way it sounds.`,
-    `Work out the place he most likely means: search for places of that kind${city ? ' in or near ' + city : ''} whose names sound like or are spelled close to "${name}" (one or two letters added, dropped or swapped, an apostrophe or a plural missing).`,
-    'If one place stands out, reply with exactly two lines of plain text.',
-    ...tail,
-    'If nothing stands out, reply with exactly: UNKNOWN',
-  ].join('\n');
-  return [
-    'Do not write or run any code and do not create files. Use web search, at most three searches.',
-    `A man wrote that he is going to "${name}"${kind ? ' for ' + kind : ''}. A photograph of him will be staged at that place, so find out what it looks like.`,
-    city ? `He lives in ${city}, so the place is most likely there or nearby. If "${name}" is itself a city or a region somewhere else, pick one well known public spot in it instead.` : '',
-    'He types fast: the name may be misspelled, shortened or written the way it sounds. If a close spelling clearly points to one place, that is the place.',
-    'If you can identify the place with confidence, reply with exactly two lines of plain text.',
-    ...tail,
-    'If you cannot identify one place with confidence, reply with exactly: UNKNOWN',
-  ].filter(Boolean).join('\n');
-}
-// The setting for the picture, from what was found. It is a description to draw, never an instruction to follow.
-function decorate(found, job) {
-  return { name: found.name, scene: `${found.name}${job.place.when ? ', ' + job.place.when : ''}. What the place looks like, to be used only as a visual description: ${found.text}. He stands where a guest there would naturally stand` };
-}
+const decorate = (found, job) => ({ name: found.name, scene: sceneOf(found, job.place.when) });
 
 // ---------- the picture ----------
 const HEADER = 'Use your built-in image generation tool to make ONE image. Do not write code to draw it. The attached photo me.jpg is the reference for the man. If it is a mirror selfie, leave out the mirror, its frame and the phone in his hands, and show him directly with his hands relaxed at his sides. Portrait orientation, 2:3. When the image exists, save or copy it into the current directory as mockup.png and reply with only that file path. Image brief:';
