@@ -66,6 +66,7 @@ const BASE_OCCASIONS = {
   event: { label: 'Event', long: 'Event or show', say: 'the event', lo: 2.5, hi: 4.5, jacket: 'preferred', scene: 'a grand hotel lobby at night' },
   dressy: { label: 'Dressy', long: 'Special occasion', say: 'the occasion', lo: 4, hi: 5, jacket: 'required', scene: 'an elegant hotel lobby' },
   casual: { label: 'Casual', long: 'Casual day', say: 'a casual day', lo: 1, hi: 3, jacket: 'optional', scene: 'a sunny city street' },
+  gym: { label: 'Gym', long: 'Gym or workout', say: 'the gym', lo: 1, hi: 1.5, jacket: 'optional', scene: 'a modern gym floor with free weights and mirrors' },
 };
 export const OCCASIONS = Object.assign({}, BASE_OCCASIONS);
 // Groups are audiences who see you repeatedly (for a lecturer, each class). Each one gets its own occasion and its own repeat memory.
@@ -265,7 +266,7 @@ export function solve(ctx, opts = {}) {
         const clash = (!!lb.metal && lb.metal !== metal) || leatherMatch(lb, shoes) <= -3;   // buckle must match the watch, leather the shoes
         if (clash && !force) return null;
         belt = lb; score += clash ? -3 : Math.min(leatherMatch(lb, shoes), 0.5);
-      } else if (options.length && locks.belt !== 'none' && (wantBelt || tuck === 'tucked' || (!soft && options[0].s >= 0.5))) {
+      } else if (options.length && locks.belt !== 'none' && (wantBelt || tuck === 'tucked' || (!soft && options[0].s >= 0.5)) && !(ctx.occ === 'gym' && !wantBelt && tuck !== 'tucked')) {
         belt = options[0].b; score += Math.min(options[0].s, 0.5);
       } else if ((tuck === 'tucked' || wantBelt) && locks.belt !== 'none') {
         if (!force) return null;                        // tucked with visible loops needs a belt
@@ -359,6 +360,14 @@ export function solve(ctx, opts = {}) {
       if (jacket && (jacket.formality || 3) >= 4 && !isSuit) score -= 0.5;
     }
     if (friday) { if (tuck === 'untucked') score += 1.5; if (isSuit) score -= 4; }
+    if (ctx.occ === 'gym') {                                               // training clothes: nothing tailored, nothing leather, nothing denim
+      if (jacket && !asked.has(jacket.id)) score -= 12;
+      if (denim) score -= 8;
+      if (!['sneaker'].includes(shoes.sub) && !asked.has(shoes.id)) score -= 10;
+      if (bottom.athletic || ['jogger', 'shorts'].includes(bottom.sub)) score += 4;
+      score += top.sub === 'tee' || top.performance ? 3 : top.sub === 'polo' ? 0.5 : -4;
+      if (tuck === 'untucked') score += 2;
+    }
     if (ctx.occ === 'casual' || ctx.occ === 'bar') { if (denim) score += 1.5; if (!jacket) score += hi <= 62 ? -0.6 : 0.8; if (tuck === 'untucked') score += 0.8; }
     if (inPlan('lounge')) { if (['knit-polo', 'sweater', 'ocbd'].includes(top.sub)) score += 1; if (denim && ctx.occ === 'lounge') score += 0.6; }
     if (mods.golf) {                                                         // the golf course look, off the course

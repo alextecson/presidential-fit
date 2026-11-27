@@ -10,7 +10,7 @@ import * as C from './check.js';
 import * as P from './place.js';
 import * as O from './openai.js';
 
-const VERSION = '1.9.0';
+const VERSION = '1.9.1';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -268,13 +268,18 @@ async function answer(text, over = {}) {
     if (over.forceOcc && over.date) p.date = over.date;
   }
   if (!p.occ) {
-    const d = defaultOcc(p.date, p.negKinds);
+    // words that say he is going somewhere, with no occasion I know: not the day's logged plan, a casual day, and say so
+    const lost = /\b(going|go|headed|heading|off|out) (to|for)\b/i.test(p.text);
+    const d = lost ? { occ: 'casual', why: 'lost' } : defaultOcc(p.date, p.negKinds);
+    if (lost) p.notes.unshift({ k: 'occ', t: 'I did not recognise where you are going, so this is a casual day. Tap the occasion to change it.' });
     p.occ = d.occ;
     if (d.why === 'class') p.notes.unshift({ k: 'occ', t: `No occasion named. ${E.fmtDate(p.date, { weekday: 'long' })} is a class day, so this is for the ${d.g.name}.` });
     else if (d.why === 'log') p.notes.unshift({ k: 'occ', t: 'No occasion named, so this is what the log has for that day.' });
-    else p.notes.unshift({ k: 'occ', t: 'No occasion named, so this is a casual day. Tap it to change.' });
+    else if (d.why !== 'lost') p.notes.unshift({ k: 'occ', t: 'No occasion named, so this is a casual day. Tap it to change.' });
   }
   p.also = (p.also || []).filter((k) => k !== p.occ);
+  // the closet was built around tailoring: for the gym it says so and asks what he trains in
+  if (p.occ === 'gym' && !st().items.some((i) => i.status !== 'retired' && i.cat === 'bottom' && ['jogger', 'shorts'].includes(i.sub))) p.notes.push({ k: 'gym', t: 'Your closet lists almost no gym wear, so this is the closest it has. Tell me what you train in, like \u201cblack joggers and my grey tee\u201d, and I add it.' });
   if (over.steps && over.steps.length) {                           // where it is: the first message says, and a later one that names a place moves it
     const f = parseAsk(over.first || '', { today: today(), date: p.date, fixDate: true, items: st().items, profile: st().profile, now: new Date() });
     for (const k of PLACE_KEYS) p[k] = f[k];
@@ -350,7 +355,7 @@ function placeOf() {
   return { venue, spot, soft: !!a.venueSoft, when: M.partOfDay(w), tag: (venue || spot).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() };
 }
 const staged = () => { const p = placeOf(); return !!(p && p.venue && !p.soft && maker()); };
-const KIND_WORD = { work: 'work', dinner: 'dinner', lounge: 'drinks', bar: 'drinks', event: 'an event', dressy: 'a special occasion', casual: 'a casual day' };
+const KIND_WORD = { gym: 'a workout', work: 'work', dinner: 'dinner', lounge: 'drinks', bar: 'drinks', event: 'an event', dressy: 'a special occasion', casual: 'a casual day' };
 function mockKey(o) { const p = placeOf(); return E.signature(o) + (p && p.tag ? '@' + p.tag : ''); }
 // A picture is shown as it is while nothing about it is out of date: not a piece's description (stale), and not the look every
 // picture should have (M.LOOK, the smile for one). One he added by hand is his own and is never redone for him.

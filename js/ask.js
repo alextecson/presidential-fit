@@ -14,11 +14,12 @@ const KINDS = [
   ['event', words('concert, show, event, game, casino, party, theater, theatre, festival, residency, comedy, musical, opera, symphony, fight, premiere, reception, fundraiser, night out, movie, movies, nightclub, clubbing, cruise, tailgate')],
   ['dinner', words('dinner, restaurant, steakhouse, supper, reservation, reservations, date night, a date, first date, lunch, brunch, eat out, eating out, out to eat, sushi, buffet')],
   ['lounge', words('lounge')],
+  ['gym', words('gym, workout, work out, working out, exercise, lifting, weights, yoga, pilates, crossfit, spin class, pickleball, tennis match, jog, jogging, a run')],
   ['bar', words('bar, bars, drinks, happy hour, pub, brewery, cocktails, beers, beer, pool hall, billiards, tavern, speakeasy, winery, wine tasting')],
   ['casual', words('casual, errands, errand, nothing, home, chill, chilling, relax, relaxing, shopping, mall, groceries, grocery, day off, off day, travel, traveling, travelling, flight, flying, airport, road trip, walk, park, coffee, breakfast, barber, haircut, weekend, lazy, hang out, hanging out, cookout, bbq, barbecue, picnic, kids, family, friends, chores, appointment, doctor, dentist, beach, driving range')],
   ['holiday', words('thanksgiving, christmas, xmas, easter, new years, new year, birthday, anniversary, valentines, holiday')],
 ];
-const ORDER = ['dressy', 'teach', 'work', 'event', 'dinner', 'lounge', 'bar'];
+const ORDER = ['dressy', 'teach', 'work', 'event', 'dinner', 'lounge', 'bar', 'gym'];
 const MOOD_WORDS = new Set(['casual', 'chill', 'chilling', 'lazy', 'relax', 'relaxing']);
 const SMART = words('elevated casual, smart casual, business casual, dressy casual, sharp casual, upscale casual, polished casual');
 const DOWN = words('more casual, less formal, less dressy, not too dressy, not too formal, not dressy, not formal, not fancy, nothing fancy, dress down, dressed down, dressing down, tone it down, toned down, turn it down, low key, lowkey, laid back, relaxed, comfortable, comfy, keep it simple');
@@ -52,7 +53,7 @@ const DWELL = set('house apartment condo crib');
 const NOT_NAME = set('instead actually though tho now later first pls thanks thx tonite least most once random ease');
 
 // Default hours for each kind of day, and for a part of the day when one is named.
-const WINDOWS = { teach: [7, 16], work: [8, 18], dinner: [18, 22], lounge: [17, 23], bar: [17, 24], event: [18, 24], dressy: [15, 23], casual: [9, 19] };
+const WINDOWS = { teach: [7, 16], work: [8, 18], dinner: [18, 22], lounge: [17, 23], bar: [17, 24], event: [18, 24], dressy: [15, 23], casual: [9, 19], gym: [6, 21] };
 const PARTS = { morning: [6, 12], midday: [11, 14], afternoon: [12, 17], evening: [17, 22], night: [18, 24], allday: [7, 22] };
 const EVENING_KINDS = new Set(['dinner', 'lounge', 'bar', 'event', 'dressy']);
 const DAYPART = new Set(['morning', 'noon', 'midday', 'afternoon', 'evening', 'night', 'tonight', 'tonite', 'lunchtime', 'home', 'work', 'school']);
