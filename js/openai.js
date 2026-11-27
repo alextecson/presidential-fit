@@ -4,6 +4,7 @@
 // The key is read from the phone's own storage by the caller and is sent to api.openai.com and nowhere else.
 import { placeTask, readPlace } from './place.js';
 import { checkTask, parseCheck } from './check.js';
+import { opinionTask, parseOpinion } from './judge.js';
 
 const API = 'https://api.openai.com/v1';
 // Tried in this order. A model the account cannot use is skipped.
@@ -47,6 +48,13 @@ export async function lookUpPlace(key, name, kind, city, signal) {
   let read = readPlace(await ask(false, 'low'));
   if (read === 'unknown') read = readPlace(await ask(true, 'medium'));      // he types fast: look once more for the place the name sounds like
   return read;
+}
+
+// One question about the fit, answered by ChatGPT. Returns { verdict, why, instead }.
+export async function opinion(key, ask, signal) {
+  const out = parseOpinion(await respond(key, { reasoning: { effort: 'low' }, input: opinionTask(ask) }, signal));
+  if (!out) throw new KeyError('ChatGPT did not give a straight answer to that. Ask it another way.', 'other');
+  return out;
 }
 
 const dataUrl = (blob) => new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(new Error('The photo could not be read.')); r.readAsDataURL(blob); });

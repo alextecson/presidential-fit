@@ -9,8 +9,9 @@ import * as L from './link.js';
 import * as C from './check.js';
 import * as P from './place.js';
 import * as O from './openai.js';
+import * as J from './judge.js';
 
-const VERSION = '1.9.1';
+const VERSION = '1.10.0';
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // The Fit tab opens on a question (mode 'ask'). The answer becomes ui.ask, and the fit is built from it (mode 'fit').
@@ -213,6 +214,13 @@ function respond(before, latest) {
     p.reply = out; p.diff = '';
     return;
   }
+  if (p.text && J.isQuestion(p.text) && after) {                    // he asked whether it works: say so first
+    const bad = problems(c.checks, 'bad'), notes = problems(c.checks, 'note');
+    const about = Object.keys(p.locks || {}).length || (p.made || []).length || Object.keys(p.allow || {}).length ? 'idea' : 'fit';
+    if (bad.length || /bend your rules|leaves them out/.test(ui.relaxed || '')) out.push(`${about === 'idea' ? 'Bad idea' : 'Not a fit'}: ${bad[0] || 'it only works by breaking one of your rules.'}`);
+    else if (notes.length) out.push(`It works, with a catch: ${notes[0]}`);
+    else out.push(about === 'idea' ? 'Good idea. It clears every check.' : 'It is a fit. It clears every check.');
+  }
   if (p.text) out.push(up(plan));
   if (staged()) out.push('The mockup is staged there.');
   for (const n of p.notes || []) if (n.k !== 'avoid') out.push(n.t);
@@ -230,6 +238,136 @@ function respond(before, latest) {
 }
 const dropDiff = () => { if (ui.ask) ui.ask.diff = ''; };
 const PLACE_KEYS = ['venue', 'venueSoft', 'venueHome', 'venueOff', 'spot'];
+// ---------- questions ----------
+// "Can I wear the loafers instead?", "is this ok for dinner?", "should I lose the jacket?": he asks, and gets a straight
+// answer. What he proposes is tried on the fit on screen without changing it, and judged by the same rules and checks that
+// build every fit. The verdict says good idea or bad idea for a proposal, fit or not a fit for the look as it stands, and
+// offers to carry the proposal out. A question the rules cannot read goes to ChatGPT (askChat).
+const problems = (checks, level) => (checks || []).filter((x) => x.level === level).map((x) => x.t);
+function judge(text) {
+  const c = current(), now = c.o;
+  if (!now || now.complete === false) return null;
+  const probe = parseAsk(text, { today: today(), date: ui.date, fixDate: true, items: st().items, profile: st().profile });
+  const nm = (id) => { const it = items.find((i) => i.id === id); return it ? (it.short || it.name) : ''; };
+  // pieces he names that the closet does not list are his: for the trial they exist, and Do it adds them for real
+  const items = st().items.slice(), trial = [];
+  const locks = Object.assign({}, probe.locks);
+  let extras = (now.extras || []).filter((id) => !(probe.noExtras || []).includes(id)).concat(probe.extras || []);
+  for (const f of probe.fresh || []) {
+    if (f.update) continue;
+    const it = Object.assign({ id: 'trial-' + trial.length, status: 'active', said: true, hold: true }, f.item);
+    items.push(it); trial.push(it);
+    if (it.cat === 'extra') extras.push(it.id); else { locks[it.cat === 'suit' ? 'jacket' : it.cat] = it.id; delete probe.allow[it.cat === 'suit' ? 'jacket' : it.cat]; }
+  }
+  extras = [...new Set(extras)];
+  const m = probe.mods || {};
+  const sameExtras = extras.slice().sort().join('+') === (now.extras || []).slice().sort().join('+');
+  const proposes = Object.keys(locks).length || Object.keys(probe.allow).length || probe.exclude.length || !sameExtras || m.shift || m.wantSuit || m.noSuit || m.noDenim || m.theme;
+  const cx = Object.assign({}, ctx(), { items });
+  const slotAsk = Object.keys(locks).length || Object.keys(probe.allow).length || probe.exclude.length || m.shift || m.wantSuit || m.noSuit || m.noDenim || m.theme;
+  if (!slotAsk && !sameExtras) return { chat: true, canDo: true };   // only an accessory is proposed, and the rules do not rate those
+  const gist = (o) => E.explain(cx, o, Object.values(locks)).map((r) => r.s).filter(Boolean).slice(0, 2);
+  if (!proposes) {
+    if (!J.isAboutThis(text)) return null;                          // nothing the rules can read: ChatGPT is asked
+    const bad = problems(c.checks, 'bad'), notes = problems(c.checks, 'note');
+    const lv = E.dressLevel(cx, now), tl = text.toLowerCase();
+    const over = /over ?dressed|too (formal|dressy|much|fancy)/.test(tl), under = /under ?dressed|too (casual|plain|simple|relaxed)/.test(tl);
+    if (lv && (over || under)) {                                    // a yes or a no, with the measure behind it
+      const is = over ? lv.f > lv.hi + 0.3 : lv.f < lv.lo - 0.3;
+      const say = `${cap1(lv.where)} wants ${lv.wants}, and this reads ${lv.reads}.`;
+      return { q: text, tone: is ? 'catch' : 'good', head: is ? (over ? 'Yes, a step overdressed' : 'Yes, a step underdressed') : (over ? 'No, you are not overdressed' : 'No, you are not underdressed'), lines: [say].concat(bad, notes) };
+    }
+    const level = (E.explain(cx, now, namedIds()).find((r) => r.k === 'Occasion') || {}).t || '';
+    if (bad.length) return { q: text, tone: 'bad', head: J.HEAD.nofit, lines: bad.concat(notes) };
+    if (notes.length) return { q: text, tone: 'catch', head: 'A fit, with a catch', lines: notes.concat(level ? [level] : []) };
+    return { q: text, tone: 'good', head: J.HEAD.fit, lines: [level, `All ${c.checks.filter((x) => x.level === 'ok').length} checks are clear.`].filter(Boolean) };
+  }
+  // the proposal on top of the look as it stands: first with everything else held, then letting the rest move
+  const b = brief();
+  const hold = { jacket: now.suit || now.jacket, top: now.top, bottom: now.bottom, shoes: now.shoes, watch: now.watch };
+  if (now.suit) delete hold.bottom;
+  const touched = new Set(Object.keys(locks).concat(Object.keys(probe.allow)));
+  if (touched.has('jacket')) { const j = items.find((i) => i.id === locks.jacket); if ((j && j.cat === 'suit') || now.suit) delete hold.bottom; }
+  if (m.wantSuit || m.noSuit) { delete hold.jacket; delete hold.bottom; }
+  if (m.noDenim && E.isDenim(items.find((i) => i.id === now.bottom))) delete hold.bottom;
+  if (m.shift || m.theme) for (const k of ['jacket', 'top', 'bottom', 'shoes']) delete hold[k];
+  for (const k of Object.keys(hold)) if (touched.has(k) || probe.exclude.includes(hold[k])) delete hold[k];
+  const mods = Object.assign({}, b.mods, m);
+  // a different dress level or a single colour look is a different fit, so nothing of the current one is favoured
+  const base = { allow: probe.allow, exclude: [...new Set((b.exclude || []).concat(probe.exclude))], extras, mods, prefer: m.shift || m.theme ? null : now, n: 1, minDiff: 0 };
+  let tier = 1, r = E.solve(cx, Object.assign({}, base, { locks: Object.assign({}, hold, locks) }))[0];
+  if (!r) { tier = 2; r = E.solve(cx, Object.assign({}, base, { locks: Object.assign({}, hold, locks, { watch: undefined }) }))[0] || E.solve(cx, Object.assign({}, base, { locks }))[0]; }
+  if (!r) { tier = 3; r = E.solve(cx, Object.assign({}, base, { locks, force: true }))[0]; }
+  if (!r) return { q: text, tone: 'bad', head: J.HEAD.bad, lines: ['No fit can be built around that for this occasion.'] };
+  const was = new Set(problems(c.checks, 'bad').concat(problems(c.checks, 'note')));
+  const fresh_ = (x) => problems(x.checks, 'note').filter((t) => !was.has(t));
+  if (tier === 1 && (problems(r.checks, 'bad').length || fresh_(r).length)) {       // holding the rest leaves a catch: see whether letting the rest move clears it
+    const clean = (x) => x && !problems(x.checks, 'bad').length && !fresh_(x).length;
+    const r2 = [E.solve(cx, Object.assign({}, base, { locks }))[0], E.solve(cx, Object.assign({}, base, { locks, prefer: null }))[0]].find(clean);
+    if (r2) { r = r2; tier = 2; }
+  }
+  const bad = problems(r.checks, 'bad'), notes = fresh_(r);
+  // how strong the look is with every piece fixed, so the proposal can be weighed against what is on screen
+  const strength = (o) => {
+    const all = { jacket: o.suit || o.jacket || 'none', top: o.top, shoes: o.shoes, belt: o.belt || 'none', watch: o.watch, tuck: o.tuck };
+    if (!o.suit) all.bottom = o.bottom;
+    const x = E.solve(cx, { locks: all, extras: o.extras || [], mods: Object.assign({}, mods, { wantSuit: false, noSuit: false, noDenim: false }), n: 1, minDiff: 0 })[0];
+    return x ? x.score : null;
+  };
+  const s0 = strength(now), s1 = strength(r.o);
+  const weaker = s0 != null && s1 != null && s1 < s0 - 1.5;
+  const occNow = E.OCCASIONS[ui.occ] || E.OCCASIONS.casual;
+  const jNow = now.suit || (now.jacket !== 'none' ? now.jacket : null), jNew = r.o.suit || (r.o.jacket !== 'none' ? r.o.jacket : null), jIt = jNew ? items.find((i) => i.id === jNew) : null;
+  const lesser = !weaker ? [] : [jNow && !jNew && occNow.jacket !== 'optional' ? `${cap1(E.sayOf(ui.occ))} is better with a jacket.` : jIt && jIt.casual && ['dinner', 'work', 'dressy'].includes(ui.occ) ? 'A sit down setting is better with a tailored jacket.' : `It clears your rules, but for ${E.sayOf(ui.occ)} the fit you have now is the stronger look.`];
+  // what would move, besides what he asked about
+  const SL = { jacket: 'jacket', top: 'top', bottom: 'trousers', shoes: 'shoes', belt: 'belt', watch: 'watch', coat: 'coat', hat: 'hat' };
+  const slotOf = (o, k) => (k === 'jacket' ? (o.suit || (o.jacket !== 'none' ? o.jacket : null)) : k === 'bottom' ? (o.suit ? null : o.bottom) : k === 'belt' ? (o.belt !== 'none' ? o.belt : null) : o[k] || null);
+  // a suit is its jacket and its trousers at once, so the trousers are not listed as a second change
+  const moved = Object.keys(SL).map((k) => ({ k, a: slotOf(now, k), z: slotOf(r.o, k) })).filter((x) => x.a !== x.z && !(x.k === 'bottom' && (r.o.suit || now.suit)));
+  const asked = moved.filter((x) => touched.has(x.k)), others = moved.filter((x) => !touched.has(x.k));
+  const change = (x) => (x.z ? `${x.k === 'jacket' && r.o.suit ? 'suit' : SL[x.k]}: ${nm(x.z)}` : `no ${SL[x.k]}`);
+  const fresh = trial.length ? [`That takes the ${E.listAnd(trial.map((it) => it.short || it.name))} as yours. Do it adds ${trial.length > 1 ? 'them' : 'it'} to your closet.`] : [];
+  const can = { q: text, canDo: true };
+  if (tier === 3 || bad.length) return Object.assign(can, { tone: 'bad', head: J.HEAD.bad, lines: (bad.length ? bad : ['It only works by breaking one of your rules.']).concat(notes, fresh) });
+  if (!moved.length && sameExtras && r.o.tuck === now.tuck) {
+    const lv = m.shift ? E.dressLevel(cx, now) : null;
+    if (lv) return { q: text, tone: 'good', head: 'It would not change the pick', lines: [`${cap1(lv.where)} wants ${lv.wants}, and this already reads ${lv.reads}.`] };
+    return { q: text, tone: 'good', head: J.HEAD.same, lines: ['That is what this fit already does.'].concat(gist(now).length ? [`It works: ${E.listAnd(gist(now))}.`] : []) };
+  }
+  const why = gist(r.o).length ? [`It works: ${E.listAnd(gist(r.o))}.`] : [];
+  if (notes.length) return Object.assign(can, { tone: 'catch', head: J.HEAD.catch, lines: notes.concat(others.length ? [`The rest would move too: ${others.map(change).join(', ')}.`] : [], fresh) });
+  if (weaker) return Object.assign(can, { tone: 'catch', head: 'It works, but this fit is stronger', lines: [`${asked.length ? cap1(asked.map(change).join(', ')) + '.' : ''}${others.length ? ` The rest would move too: ${others.map(change).join(', ')}.` : ''}`.trim()].filter(Boolean).concat(lesser, fresh) });
+  if (others.length) return Object.assign(can, { tone: 'good', head: J.HEAD.moves, lines: [`${asked.length ? cap1(asked.map(change).join(', ')) + '. ' : ''}To make it work the rest changes: ${others.map(change).join(', ')}.`].concat(why, fresh) });
+  return Object.assign(can, { tone: 'good', head: J.HEAD.good, lines: [`${asked.length ? cap1(asked.map(change).join(', ')) + '. ' : ''}Nothing else needs to change.`].concat(why, fresh) });
+}
+const cap1 = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t);
+// A question the rules could not read: ChatGPT answers it with the fit for context, on this phone with a key or through the Mac.
+const chat = { ctl: null };
+async function askChat(text, canDo = false) {
+  const a = ui.ask, c = current();
+  const linked = !!(ui.link && st().settings.linkSeen);
+  if (!ui.hasKey && !linked) { a.verdict = { q: text, tone: 'info', head: 'I could not read that as a question about the fit', lines: ['Ask about a piece or a change, like “can I wear the loafers instead?” or “is this ok for dinner?”'] }; render(); return; }
+  const w = win(), wx = ctx().weather;
+  const occ = E.OCCASIONS[ui.occ] || E.OCCASIONS.casual;
+  const ask = { question: text, lines: c.o ? M.briefFor(c.o, st().items, st().profile, 'auto').lines : [], occasion: occ.teach ? 'teaching a class' : ui.occ === 'dressy' ? 'a special occasion' : E.sayOf(ui.occ),
+    when: `${ui.date === today() ? 'today' : E.fmtDate(ui.date, { weekday: 'long' })}${w ? `, ${E.hourLabel(w.from)} to ${E.hourLabel(w.to)}` : ''}`,
+    weather: wx && wx.hi != null ? `Weather in those hours: ${Math.round(wx.lo == null ? wx.hi : wx.lo)} to ${Math.round(wx.hi)} degrees Fahrenheit, rain chance ${Math.round(wx.rain || 0)} percent.` : '',
+    flags: problems(c.checks, 'bad').concat(problems(c.checks, 'note')) };
+  a.verdict = { q: text, tone: 'info', head: 'Asking ChatGPT', busy: true, lines: [] }; render();
+  chat.ctl = new AbortController();
+  const onMac = () => L.askOpinion(ui.link, ask, { signal: chat.ctl.signal, onStage: (s) => { if (a.verdict && a.verdict.busy) { a.verdict.head = s.st === 'asleep' ? 'Your Mac is not answering. Wake it and this carries on.' : 'ChatGPT is thinking it over'; settle(); } } });
+  try {
+    let out;
+    const own = ui.hasKey ? await S.secretGet('openai') : null;
+    if (own) { try { out = await O.opinion(own, ask, chat.ctl.signal); } catch (e) { if ((e && e.name === 'AbortError') || !linked) throw e; out = await onMac(); } }
+    else out = await onMac();
+    const tone = out.verdict === 'good' || out.verdict === 'fit' ? 'good' : out.verdict === 'depends' ? 'catch' : 'bad';
+    a.verdict = { q: text, tone, head: J.HEAD[out.verdict] || 'Answer', lines: [out.why].concat(out.instead ? ['Instead: ' + out.instead] : []), by: 'ChatGPT', canDo };
+  } catch (e) {
+    a.verdict = e && e.name === 'AbortError' ? null : { q: text, tone: 'info', head: 'No answer this time', lines: [(e && e.message) || 'Ask again.'] };
+  }
+  chat.ctl = null; saveSession(); settle();
+}
 // The closet is not his whole wardrobe. A piece he names that it does not list is his all the same: it is added to the closet,
 // described from his words, and goes into the fit. It stays "manual only" (worn when he names it) until he says the stylist may pick it.
 function adopt(p) {
@@ -646,7 +784,7 @@ function viewAsk() {
       <h1>What is the fit for?</h1>
       <textarea id="askBox" class="askbox" rows="3" data-in="askText" data-enter="askGo" enterkeyhint="go" placeholder="Dinner at Marios tonight, then drinks" autocomplete="off">${esc(ui.draft)}</textarea>
       <button class="btn primary" data-act="askGo">Get my fit</button>
-      <p class="fine">Say where and when, and anything you want in it. Name the place and the mockup is staged there. Name a piece the closet does not list and it is taken as yours. Monday class with the fedora. No jeans.</p>
+      <p class="fine">Say where and when, and anything you want in it. Name the place and the mockup is staged there. Name a piece the closet does not list and it is taken as yours. Or ask: can I wear jeans to dinner? Monday class with the fedora.</p>
     </section>
     <section class="sec"><h3>Or tap one</h3>
       <div class="seg" role="group" aria-label="Day">${quick.map(([d, l]) => `<button class="${d === when ? 'on' : ''}" data-act="askWhen" data-date="${d}">${l}</button>`).join('')}
@@ -656,6 +794,12 @@ function viewAsk() {
     ${wearing.length ? `<section class="sec"><h3>Wearing today</h3><div class="card list">${wearing.map((w) => logLine(w, 'gotoDay')).join('')}</div></section>` : ''}`;
 }
 // What was asked, how it was read, and a place to change it.
+function verdictHtml(v) {
+  if (!v) return '';
+  if (v.busy) return `<div class="verdict info"><q>${esc(v.q)}</q><div class="busy"><div class="spinner"></div><p>${esc(v.head)}</p></div><div class="actions"><button class="btn small" data-act="dropVerdict">Cancel</button></div></div>`;
+  return `<div class="verdict ${esc(v.tone)}"><q>${esc(v.q)}</q><h3>${esc(v.head)}</h3>${(v.lines || []).map((t) => `<p>${esc(t)}</p>`).join('')}${v.by ? `<p class="fine">Answered by ${esc(v.by)}, with this fit for context.</p>` : ''}
+    <div class="actions">${v.canDo ? `<button class="btn small primary" data-act="doVerdict">${v.tone === 'bad' ? 'Do it anyway' : 'Do it'}</button>` : ''}<button class="btn small" data-act="dropVerdict">${v.canDo ? 'Keep this fit' : 'OK'}</button></div></div>`;
+}
 function askBar() {
   const a = ui.ask, occ = E.OCCASIONS[ui.occ] || E.OCCASIONS.casual;
   const also = (a.also || []).filter((k) => E.OCCASIONS[k] && k !== ui.occ);
@@ -679,7 +823,8 @@ function askBar() {
     </div>
     ${changes.length ? `<div class="changes"><h3>Your changes <span>${changes.length}</span></h3><div class="chips wrap">${changes.join('')}</div></div>` : ''}
     ${(a.reply || []).length || a.diff ? `<p class="reply">${esc((a.reply || []).concat(a.diff ? [a.diff] : []).join(' '))}</p>` : ((a.notes || []).length ? `<ul class="notes">${a.notes.map((n) => `<li>${esc(n.t)}</li>`).join('')}</ul>` : '')}
-    <div class="refine"><input type="text" id="refineBox" data-in="refineText" data-enter="refine" enterkeyhint="go" placeholder="Change a piece or the place" aria-label="Change something about this fit, or name the place" autocomplete="off" value="${esc(ui.refineDraft)}"><button class="btn small" data-act="refine">Go</button></div>
+    ${verdictHtml(a.verdict)}
+    <div class="refine"><input type="text" id="refineBox" data-in="refineText" data-enter="refine" enterkeyhint="go" placeholder="Change it, or ask: can I wear…?" aria-label="Change something about this fit, or name the place" autocomplete="off" value="${esc(ui.refineDraft)}"><button class="btn small" data-act="refine">Go</button></div>
     <div class="actions"><button class="btn small" data-act="refreshFit">Refresh</button><button class="btn small" data-act="askAgain">Start over</button></div>
   </div>`;
 }
@@ -1081,6 +1226,13 @@ const A = {
     if (!v || !ui.ask) return null;
     ui.refineDraft = '';
     const a = ui.ask;
+    // a question is answered, not carried out: good idea or bad idea, fit or not a fit, with a button to do it
+    if (J.isQuestion(v) && !ui.doing) {
+      const verdict = judge(v);
+      if (verdict && !verdict.chat) { a.verdict = verdict; saveSession(); render(); window.scrollTo(0, 0); return null; }
+      return askChat(v, !!(verdict && verdict.canDo));
+    }
+    ui.doing = false; a.verdict = null;
     // just a colour ("red", "they are brown"): it belongs to the piece in this fit that was added without one
     const cur = current().o;
     const blank = cur ? E.majorIds(cur).map(item).filter((it) => it && it.said && !it.color && it.cat !== 'extra' && it.cat !== 'watch') : [];
@@ -1277,6 +1429,8 @@ const A = {
     S.save(); reaudit(); redrawLook(); toast('Noted on the piece. The stylist takes it into account.', 4000);
   },
   clearFit: (d) => { const it = item(d.id); if (!it) return; delete it.fitIssue; S.save(); if (ui.mode === 'fit') reaudit(); redrawLook(); },
+  doVerdict: () => { const v = ui.ask && ui.ask.verdict; if (!v || !v.canDo) return null; ui.ask.verdict = null; ui.doing = true; ui.refineDraft = v.q; const box = $('#refineBox'); if (box) box.value = v.q; return A.refine(); },
+  dropVerdict: () => { if (chat.ctl) chat.ctl.abort(); if (ui.ask) ui.ask.verdict = null; saveSession(); render(); },
   retryAuto: () => { const c = current(); if (!c.o) return null; const sig = mockKey(c.o); auto.failed.delete(sig); return runAuto(sig, true); },
   setupKey: () => { ui.tab = 'more'; closeSheet(); render(); const el = $('#keyCard'); if (el) el.scrollIntoView({ block: 'start' }); },
   pasteMock: async () => {

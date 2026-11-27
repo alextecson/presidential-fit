@@ -200,3 +200,49 @@ export async function askCheck(link, plan, photo, { signal, onStage, ackMs = 250
     if (sentAt && Date.now() - sentAt > totalMs) throw new LinkError('Your Mac took too long. Try again.', 'macerr');
   }
 }
+
+// Ask ChatGPT on the Mac one question about the fit. ask = { question, lines, occasion, when, weather, flags } (see judge.js).
+// Resolves to { verdict, why, instead }. The answer comes back sealed with a key made for this one request.
+export async function askOpinion(link, ask, { signal, onStage, ackMs = 25000, patienceMs = 180000, totalMs = 120000 } = {}) {
+  const pair = await newPair();
+  const id = hex(crypto.getRandomValues(new Uint8Array(8)));
+  const started = Date.now();
+  const since = Math.floor(started / 1000) - 3;
+  await post(link.req, await seal(link.key, Object.assign({ v: 1, id, t: started, pub: pair.pub, kind: 'ask' }, ask)), signal);
+  const drop = () => { seal(link.key, { v: 1, cancel: id, t: Date.now() }).then((m) => post(link.req, m)).catch(() => {}); };
+  if (signal) signal.addEventListener('abort', drop, { once: true });
+  const stop = () => { if (signal && signal.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; throw e; } };
+  const nap = (ms) => new Promise((res) => {
+    if (!signal) { setTimeout(res, ms); return; }
+    const done = () => { clearTimeout(t); signal.removeEventListener('abort', done); res(); };
+    const t = setTimeout(done, ms);
+    signal.addEventListener('abort', done);
+  });
+  let ackedAt = 0, asleep = false;
+  for (;;) {
+    stop();
+    await nap(ackedAt ? 2000 : asleep ? 8000 : 2000);
+    stop();
+    let msgs = [];
+    try { msgs = await read(link.res, since, signal); }
+    catch (e) { if (e && e.name === 'AbortError') throw e; if (e && e.busy) await sleep(6000); }
+    for (const m of msgs) {
+      const s = await open(link.key, m.message);
+      if (!s || s.id !== id) continue;
+      if (s.st === 'error') throw new LinkError(s.msg || 'Your Mac could not answer that.', 'macerr');
+      if (s.st === 'working' && !ackedAt) { ackedAt = Date.now(); if (onStage) onStage(s); }
+      if (s.st === 'said' && typeof s.pub === 'string' && typeof s.box === 'string') {
+        const key = await sessionKey(pair.priv, s.pub, id);
+        const plain = await openBytes(key, unb64(s.box));
+        let out = null;
+        try { out = plain ? JSON.parse(td.decode(plain)) : null; } catch (e) { out = null; }
+        if (!out) throw new LinkError('The answer arrived damaged. Ask again.', 'relay');
+        return out;
+      }
+    }
+    const waited = Date.now() - started;
+    if (!ackedAt && !asleep && waited > ackMs) { asleep = true; if (onStage) onStage({ st: 'asleep' }); }
+    if (!ackedAt && waited > patienceMs) { drop(); throw new LinkError('Your Mac is not answering, so ChatGPT could not be asked. Wake it and ask again.', 'mac'); }
+    if (ackedAt && Date.now() - ackedAt > totalMs) throw new LinkError('Your Mac took too long. Ask again.', 'macerr');
+  }
+}

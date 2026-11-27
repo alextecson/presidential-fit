@@ -9,6 +9,7 @@ A personal stylist web app for iPhone. It opens on one question, "What is the fi
 - Every fit comes with a check list: the hours it is worn, the live hour by hour weather for those hours, metals, belt and shoes, tuck, dress level, and what each audience has already seen.
 - Works offline once added to the Home Screen. The weather check needs a connection and says so when it has none.
 - Your closet, log, photos and any API key stay on the device. Nothing personal is stored in this repository.
+- Ask a question and get a straight answer. "Can I wear the loafers instead?", "should I lose the jacket?", "is this ok for dinner?", "am I overdressed?": the proposal is tried on the fit without changing it and judged by the same rules that build every fit. The answer is good idea or bad idea, fit or not a fit, with the reason and a Do it button. Questions the rules cannot read, and anything about accessories, go to ChatGPT with the fit for context.
 - Every fit says why it works: the occasion and the dress level it wants, the weather in the hours it is worn, how the colours and the details hold together, what is fresh about it, and what is there because you asked.
 - You are smiling in the mockups. Pictures made before that are redone, as an edit of the same photo, when you next see them.
 - Each fit is shown as a realistic mockup with you as the model, made by ChatGPT's image engine, and a new one is made whenever the fit changes. Three ways, in this order:

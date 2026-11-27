@@ -244,7 +244,7 @@ export function solve(ctx, opts = {}) {
     let tuck;
     const looseOnly = top.tuck === 'untucked-only' || solo(top);
     if (locks.tuck && !(looseOnly && locks.tuck === 'tucked')) tuck = locks.tuck;
-    else if (looseOnly) tuck = 'untucked';
+    else if (looseOnly || (ctx.occ === 'gym' && !isSuit)) tuck = 'untucked';        // training clothes are worn loose
     else if (isSuit || top.sub === 'dress-shirt' || !top.untuckOk) tuck = 'tucked';
     else if (jacket && !friday && shift > -1 && (occ.teach || ['dressy', 'dinner', 'work'].includes(ctx.occ))) tuck = 'tucked';
     else tuck = 'untucked';
@@ -471,7 +471,7 @@ export function solve(ctx, opts = {}) {
     return {
       score,
       o: { occ: ctx.occ, date: ctx.date, suit: isSuit ? jacket.id : null, jacket: jacket ? jacket.id : 'none', top: top.id, bottom: bottom.id, belt: belt ? belt.id : 'none', shoes: shoes.id, socks: socks ? socks.id : null, watch: watch.id, glasses: glasses ? glasses.id : null, coat: coat ? coat.id : null, hat: hat ? hat.id : null, tuck,
-        also: plan.slice(1), shift: sh || 0, easy: friday && !(occ.casualDays || []).includes(day), lab: !!mods.lab, extras: extras.slice() },
+        theme: mods.theme || '', also: plan.slice(1), shift: sh || 0, easy: friday && !(occ.casualDays || []).includes(day), lab: !!mods.lab, extras: extras.slice() },
       why,
     };
   }
@@ -577,8 +577,28 @@ export function audit(ctx, o) {
   // tuck
   if ((top.tuck === 'untucked-only' || solo(top)) && o.tuck === 'tucked') add('Tuck', 'bad', `The ${nm(top)} is worn untucked only.`);
   else if (o.tuck === 'untucked' && suit) add('Tuck', 'bad', 'A suit takes a tucked shirt.');
+  else if (o.tuck === 'untucked' && key === 'gym') add('Tuck', 'ok', 'Worn loose for training.');
   else if (o.tuck === 'untucked' && top.tuck !== 'untucked-only' && !solo(top) && !top.untuckOk) add('Tuck', 'bad', `The ${nm(top)} is cut to be tucked.`);
   else add('Tuck', 'ok', o.tuck === 'tucked' ? (jacket && !suit ? 'Fully tucked, so the jacket can come off.' : 'Fully tucked.') : 'Untucked, hem above mid fly.');
+
+  // colour and contrast
+  {
+    const jc = jacket ? colorOf(jacket) : null, tc = colorOf(top), bc = colorOf(bottom);
+    const clash = [];
+    if (!o.theme) {
+      if (jacket && !suit && jacket.color && jacket.color === bottom.color) clash.push(`The ${nm(jacket)} and the ${nm(bottom)} are the same colour, which reads as a suit that does not match.`);
+      if (!suit && top.color && top.color === bottom.color) clash.push(`The ${nm(top)} and the ${nm(bottom)} are the same colour. The look wants a break between them.`);
+      if (jacket && top.color && top.color === jacket.color) clash.push(`The ${nm(top)} disappears under a jacket of the same colour.`);
+    }
+    if (shoes.leather === 'black' && WARM_BOTTOMS.includes(bottom.color)) clash.push(`Black shoes under ${bc.label} trousers. Brown sits better there.`);
+    if (BROWNS.includes(shoes.leather) && bottom.color === 'black') clash.push('Brown shoes with black trousers. Black shoes sit better there.');
+    const ACC = ['pink', 'red', 'lavender', 'green', 'sage', 'mustard', 'burgundy', 'purple', 'orange', 'teal', 'turquoise', 'coral', 'yellow'];
+    const acc = [jacket, top, suit ? null : bottom, shoes].filter((x) => x && ACC.includes(x.color));
+    if (acc.length > 1 && !o.theme) clash.push(`${cap(listAnd(acc.map((x) => 'the ' + nm(x))))} are two accent colours in one look. One is enough.`);
+    if (jacket && top.pattern && top.pattern !== 'solid' && jacket.pattern && jacket.pattern !== 'solid') clash.push('A patterned shirt under a patterned jacket. One pattern should lead.');
+    if (clash.length) clash.forEach((t) => add('Colour', 'note', t));
+    else add('Colour', 'ok', jacket && jc.label && bc.label && !suit ? `${cap(jc.label)} over ${bc.label}, with ${tc.label || 'the shirt'} between them: the colours hold together.` : 'The colours hold together.');
+  }
 
   // one focal point
   const loud = [jacket, top, suit ? null : bottom, shoes, belt].filter((x) => x && x.statement);
@@ -643,6 +663,21 @@ export function audit(ctx, o) {
   if (hat && metal && (colorOf(hat).tone === 'warm') !== (metal === 'gold') && colorOf(hat).tone !== 'neutral') add('Hat', 'note', `The ${nm(hat)} is a ${colorOf(hat).tone} piece on a ${metal === 'gold' ? 'warm, gold' : 'cool, silver'} fit.`);
   if (occ.teach || occ.jacket !== 'optional') add('Yours to check', 'you', 'Pressed, lint free, shoes conditioned, nothing faded.');
   return out;
+}
+// How dressed up a fit reads against what its occasion wants. f is the fit, lo and hi the range the day calls for.
+export function dressLevel(ctx, o) {
+  const get = (id) => ctx.items.find((i) => i.id === id);
+  const key = o.occ || ctx.occ, occ = OCCASIONS[key] || OCCASIONS.casual, date = o.date || ctx.date;
+  const jacket = o.suit ? get(o.suit) : (o.jacket && o.jacket !== 'none' ? get(o.jacket) : null);
+  const ps = [get(o.top), get(o.suit || o.bottom), get(o.shoes), jacket].filter(Boolean);
+  if (!ps.length) return null;
+  const f = ps.reduce((a, x) => a + (x.formality || 3), 0) / ps.length;
+  const easy = !!occ.teach && ((occ.casualDays || []).includes(dow(date)) || !!o.easy || !!o.lab);
+  let lo = easy ? 2 : occ.lo, hi = easy ? 4 : occ.hi;
+  const sh = occ.teach ? Math.max(0, o.shift || 0) : (o.shift || 0);
+  if (sh) { lo = Math.max(1, Math.min(4.5, lo + sh)); hi = Math.min(5, Math.max(lo + 1, hi + sh)); }
+  const word = (v) => (v < 1.8 ? 'very relaxed' : v < 2.6 ? 'relaxed' : v < 3.4 ? 'smart casual' : v < 4.6 ? 'sharp' : 'formal');
+  return { f, lo, hi, reads: word(f), wants: word(lo) === word(hi) ? word(lo) : `${word(lo)} to ${word(hi)}`, where: key === 'dressy' ? 'a special occasion' : sayOf(key) };
 }
 // ---------- why this fit ----------
 // Says in plain words why a fit suits the day it is for: the occasion, the weather in the hours it is worn, how the colours

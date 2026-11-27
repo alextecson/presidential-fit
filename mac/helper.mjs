@@ -20,6 +20,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const lib = fs.existsSync(path.join(here, 'link.js')) ? here : path.join(here, '..', 'js');
 const { RELAY, derive, seal, open, newPair, sessionKey, sealBytes, openBytes, tidy, briefHash } = await import(pathToFileURL(path.join(lib, 'link.js')).href);
 const { checkTask, parseCheck } = await import(pathToFileURL(path.join(lib, 'check.js')).href);
+const { opinionTask, parseOpinion } = await import(pathToFileURL(path.join(lib, 'judge.js')).href);
 const { promptFrom, editPromptFrom, diffLines, WHENS, LOOK } = await import(pathToFileURL(path.join(lib, 'mockup.js')).href);
 const { placeTask, readPlace, sceneOf, placeName } = await import(pathToFileURL(path.join(lib, 'place.js')).href);
 
@@ -115,6 +116,7 @@ async function onMessage(m) {
   const raw = await open(link.key, m.message);
   if (raw && raw.v === 1 && typeof raw.cancel === 'string' && typeof raw.t === 'number' && Math.abs(Date.now() - raw.t) < 10 * 60 * 1000) { cancel(raw.cancel); return; }
   if (raw && raw.v === 1 && raw.kind === 'check') { await onCheck(raw); return; }
+  if (raw && raw.v === 1 && raw.kind === 'ask') { await onAsk(raw); return; }
   if (raw && raw.v === 1 && raw.part === 'photo') { await onPhoto(raw, m); return; }
   const req = checkRequest(raw);
   if (!req || taken.has(req.id)) return;
@@ -144,7 +146,7 @@ async function pump() {
     catch (e) {
       if (!job.cancelled) {                                           // cancelled means the phone moved on: nothing to report
         log('job', job.id, 'failed:', e.message);
-        try { await say({ id: job.id, st: 'error', msg: e instanceof UserError ? e.message : job.kind === 'check' ? 'Your Mac could not check the photo. Try again.' : 'Your Mac could not make the mockup. Try again.' }); } catch (e2) { /* phone will time out */ }
+        try { await say({ id: job.id, st: 'error', msg: e instanceof UserError ? e.message : job.kind === 'check' ? 'Your Mac could not check the photo. Try again.' : job.kind === 'ask' ? 'Your Mac could not answer that. Ask again.' : 'Your Mac could not make the mockup. Try again.' }); } catch (e2) { /* phone will time out */ }
       }
     }
     finish(job.id);
@@ -169,6 +171,7 @@ function editBase(job) {
 }
 async function handle(job) {
   if (job.kind === 'check') return handleCheck(job);
+  if (job.kind === 'ask') return handleAsk(job);
   const hash = await briefHash(job.lines, job.scene);
   const cached = path.join(CACHE, hash + '.jpg'), noteFile = path.join(CACHE, hash + '.json');
   const had = fs.existsSync(cached) ? (noteOf(hash) || {}) : null;
@@ -247,6 +250,46 @@ async function onPhoto(r, m) {
     log('check', r.id, 'failed:', e.message);
     try { await say({ id: r.id, st: 'error', msg: e instanceof UserError ? e.message : 'Your Mac could not read the photo. Try again.' }); } catch (e2) { /* phone will time out */ }
   }
+}
+// ---------- a question ----------
+// He asks whether something is a good idea or a fit, in words the phone's own rules could not settle. ChatGPT answers
+// with the fit for context. Nothing is kept: the question lives in the log only as a count.
+async function onAsk(r) {
+  if (!/^[0-9a-f]{16}$/.test(r.id || '') || typeof r.t !== 'number' || Math.abs(Date.now() - r.t) > 10 * 60 * 1000 || typeof r.pub !== 'string' || r.pub.length > 200) return;
+  const question = tidy(r.question, 300);
+  if (question.length < 3) return;
+  const lines = (Array.isArray(r.lines) ? r.lines : []).slice(0, 14).map((l) => tidy(l, 240)).filter((l) => /^[A-Z][A-Z ]{1,14}: \S/.test(l));
+  if (taken.has(r.id) || seen.has(r.id)) return;
+  taken.add(r.id); seen.set(r.id, { t: Date.now(), done: true, tries: 1 }); saveSeen();
+  if (queue.length >= 3) { try { await say({ id: r.id, st: 'error', msg: 'Your Mac is busy. Ask again in a minute.' }); } catch (e) { /* phone will time out */ } return; }
+  const job = { id: r.id, kind: 'ask', pub: r.pub, ask: { question, lines, occasion: tidy(r.occasion, 60), when: tidy(r.when, 60), weather: tidy(r.weather, 120), flags: (Array.isArray(r.flags) ? r.flags : []).slice(0, 6).map((f) => tidy(f, 200)) } };
+  queue.push(job);
+  stayAwake();
+  log('question', job.id, 'asked,', lines.length, 'lines of context');
+  say({ id: job.id, st: 'working' }).catch(() => {});
+  pump();
+}
+async function handleAsk(job) {
+  const d = readJson(CHECKS, {}), n = d.d === new Date().toDateString() ? d.n : 0;
+  if (n >= (cfg.maxChecksPerDay || 80)) throw new UserError('Your Mac has answered its limit of questions and photo checks for today.');
+  const dir = path.join(HOME, 'jobs', job.id);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const started = Date.now();
+  let said = '';
+  try {
+    await run(cfg.codex, ['exec', '--skip-git-repo-check', '-s', 'read-only', '-c', 'model_reasoning_effort="low"', '-C', dir, '-o', 'last.txt', '-'], opinionTask(job.ask), { cwd: dir, timeoutMs: 90000, job });
+    said = fs.readFileSync(path.join(dir, 'last.txt'), 'utf8').trim();
+  } catch (e) { if (e instanceof UserError) throw e; said = ''; }
+  finally { job.child = null; fs.rmSync(dir, { recursive: true, force: true }); }
+  if (job.cancelled) throw new Error('cancelled');
+  const out = parseOpinion(said);
+  if (!out) throw new UserError('ChatGPT did not give a straight answer to that. Ask it another way.');
+  fs.writeFileSync(CHECKS, JSON.stringify({ d: new Date().toDateString(), n: n + 1 }));
+  const pair = await newPair();
+  const box = Buffer.from(await sealBytes(await sessionKey(pair.priv, job.pub, job.id), Buffer.from(JSON.stringify(out)))).toString('base64url');
+  await say({ id: job.id, st: 'said', pub: pair.pub, box });
+  log('question', job.id, 'answered in', Math.round((Date.now() - started) / 1000) + 's:', out.verdict);
 }
 const CHECKS = path.join(HOME, 'checks.json');
 async function handleCheck(job) {

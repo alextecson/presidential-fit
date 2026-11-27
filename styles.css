@@ -130,6 +130,14 @@ main { flex: 1; display: flex; flex-direction: column; gap: 14px; outline: 0;
 .making-text span { font-size: .84rem; opacity: .9; }
 .making-text .spinner { border-color: rgba(255, 255, 255, .3); border-top-color: #fff; }
 .setat { margin: 7px 2px 0; }
+.verdict { border-left: 3px solid var(--mute); background: color-mix(in srgb, var(--mute) 10%, var(--card)); border-radius: 10px; padding: 12px 14px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.verdict q { font-size: .82rem; color: var(--mute); }
+.verdict h3 { margin: 0; font: 600 1.2rem/1.2 var(--serif); letter-spacing: 0; text-transform: none; }
+.verdict p { margin: 0; font-size: .9rem; line-height: 1.4; }
+.verdict.good { border-left-color: var(--ok); background: color-mix(in srgb, var(--ok) 9%, var(--card)); } .verdict.good h3 { color: var(--ok); }
+.verdict.catch { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, var(--card)); } .verdict.catch h3 { color: var(--warn); }
+.verdict.bad { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, var(--card)); } .verdict.bad h3 { color: var(--danger); }
+.verdict .actions { margin-top: 4px; }
 .lookcheck { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 9px; }
 .lookcheck h3 { margin: 0; }
 .lookcheck .lc-head { display: flex; gap: 12px; align-items: center; }
